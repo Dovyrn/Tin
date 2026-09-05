@@ -9,7 +9,7 @@ objc2-quartz-core = "0.3"
 block2 = "0.6"
 
 [package]
-name = "tin"
+name = "tin-jni"
 version = "0.1.0"
 edition = "2021"
 

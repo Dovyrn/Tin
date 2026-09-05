@@ -324,7 +324,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tin"
+name = "tin-jni"
 version = "0.1.0"
 dependencies = [
  "jni",
