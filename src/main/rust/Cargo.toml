@@ -5,7 +5,8 @@ members = ["crates/metal"]
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-metal = "0.3"
-objc2-quartz-core = "0.3"
+objc2-quartz-core = { version = "0.3", features = ["objc2-metal"] }
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSView", "NSResponder", "objc2-quartz-core"] }
 block2 = "0.6"
 
 [package]
@@ -20,6 +21,7 @@ crate-type = ["cdylib"]
 [dependencies]
 tin-metal = { path = "crates/metal" }
 jni = "0.22"
+objc2-app-kit = { workspace = true }
 
 [profile.release]
 lto = true

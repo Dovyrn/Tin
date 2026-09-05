@@ -14,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 public class MTLSurface implements GpuSurfaceBackend {
     @Getter
     private final long handle;
+    private final long device;
 
     @Override
     public void configure(GpuSurface.Configuration config) {
@@ -37,7 +38,7 @@ public class MTLSurface implements GpuSurfaceBackend {
 
     @Override
     public void present() {
-        Native.nSurfacePresent(handle);
+        Native.nSurfacePresent(handle, device);
     }
 
     @Override

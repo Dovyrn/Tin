@@ -1,8 +1,31 @@
 #![allow(clippy::todo, clippy::too_many_arguments, unused_variables)]
 
+use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{JClass, JFloatArray, JIntArray, JLongArray, JObject, JObjectArray, JString};
 use jni::sys::{jboolean, jdouble, jfloat, jint, jlong};
 use jni::EnvUnowned;
+use metal::device::Device;
+use metal::surface::{Present, Surface};
+use objc2_app_kit::NSWindow;
+
+const IMMEDIATE: jint = 0;
+const FIFO: jint = 2;
+
+fn device<'a>(handle: jlong) -> &'a Device {
+    unsafe { &*(handle as *const Device) }
+}
+
+fn surface<'a>(handle: jlong) -> &'a mut Surface {
+    unsafe { &mut *(handle as *mut Surface) }
+}
+
+fn present(mode: jint) -> Present {
+    match mode {
+        IMMEDIATE => Present::Immediate,
+        FIFO => Present::Fifo,
+        _ => unreachable!("present mode {mode}"),
+    }
+}
 
 macro_rules! entries {
     ($($name:ident($env:pat_param, $class:pat_param $(, $arg:ident: $ty:ty)* $(,)?) $(-> $ret:ty)? $body:block)*) => {
@@ -20,11 +43,13 @@ entries! {
     nDeviceCreate(_env, _class,
         window: jlong, log_level: jint, sync_logs: jboolean, labels: jboolean, validation: jboolean,
     ) -> jlong {
-        todo!()
+        Box::into_raw(Box::new(Device::new())) as jlong
     }
 
-    nDeviceSurface(_env, _class, device: jlong, window: jlong) -> jlong {
-        todo!()
+    nDeviceSurface(_env, _class, handle: jlong, window: jlong) -> jlong {
+        let window = unsafe { &*(window as *const NSWindow) };
+        let surface = Surface::new(device(handle), window);
+        Box::into_raw(Box::new(surface)) as jlong
     }
 
     nDeviceEncoder(_env, _class, device: jlong) -> jlong {
@@ -75,8 +100,8 @@ entries! {
         todo!()
     }
 
-    nDeviceClose(_env, _class, device: jlong) {
-        todo!()
+    nDeviceClose(_env, _class, handle: jlong) {
+        drop(unsafe { Box::from_raw(handle as *mut Device) });
     }
 
     nDeviceQueries(_env, _class, device: jlong, size: jint) -> jlong {
@@ -287,32 +312,37 @@ entries! {
         todo!()
     }
 
-    nSurfaceConfigure(_env, _class, surface: jlong, width: jint, height: jint, mode: jint) {
+    nSurfaceConfigure(_env, _class, handle: jlong, width: jint, height: jint, mode: jint) {
+        surface(handle).configure(width as u32, height as u32, present(mode));
+    }
+
+    nSurfaceSuboptimal(_env, _class, handle: jlong) -> jboolean {
+        false as jboolean
+    }
+
+    nSurfaceAcquire(_env, _class, handle: jlong) {
+        assert!(surface(handle).acquire(), "no drawable");
+    }
+
+    nSurfaceBlit(_env, _class, handle: jlong, encoder: jlong, view: jlong) {
         todo!()
     }
 
-    nSurfaceSuboptimal(_env, _class, surface: jlong) -> jboolean {
-        todo!()
+    nSurfacePresent(_env, _class, handle: jlong, device_handle: jlong) {
+        surface(handle).present(device(device_handle));
     }
 
-    nSurfaceAcquire(_env, _class, surface: jlong) {
-        todo!()
+    nSurfaceClose(_env, _class, handle: jlong) {
+        drop(unsafe { Box::from_raw(handle as *mut Surface) });
     }
 
-    nSurfaceBlit(_env, _class, surface: jlong, encoder: jlong, view: jlong) {
-        todo!()
-    }
-
-    nSurfacePresent(_env, _class, surface: jlong) {
-        todo!()
-    }
-
-    nSurfaceClose(_env, _class, surface: jlong) {
-        todo!()
-    }
-
-    nSurfaceModes(_env, _class, surface: jlong) -> JIntArray<'l> {
-        todo!()
+    nSurfaceModes(mut env, _class, handle: jlong) -> JIntArray<'l> {
+        env.with_env(|env| {
+            let modes = env.new_int_array(2)?;
+            modes.set_region(env, 0, &[IMMEDIATE, FIFO])?;
+            Ok::<_, jni::errors::Error>(modes)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
     nMemoryCpu(_env, _class,

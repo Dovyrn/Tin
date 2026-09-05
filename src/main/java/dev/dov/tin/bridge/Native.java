@@ -143,7 +143,7 @@ public class Native {
 
     public native void nSurfaceBlit(long surface, long encoder, long view);
 
-    public native void nSurfacePresent(long surface);
+    public native void nSurfacePresent(long surface, long device);
 
     public native void nSurfaceClose(long surface);
 

@@ -1,6 +1,7 @@
 package dev.dov.tin.metal;
 
 import dev.dov.tin.bridge.Native;
+import org.lwjgl.glfw.GLFWNativeCocoa;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.pipeline.CompiledRenderPipeline;
@@ -40,7 +41,8 @@ public class MTLDevice implements GpuDeviceBackend {
 
     @Override
     public GpuSurfaceBackend createSurface(long window) {
-        return new MTLSurface(Native.nDeviceSurface(handle, window));
+        var cocoa = GLFWNativeCocoa.glfwGetCocoaWindow(window);
+        return new MTLSurface(Native.nDeviceSurface(handle, cocoa), handle);
     }
 
     @Override
