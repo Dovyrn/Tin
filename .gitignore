@@ -1,0 +1,11 @@
+.DS_Store
+.gradle
+build
+out/
+.idea
+*.iml
+hs_err_pid*
+run
+.cache
+/logs
+src/main/rust/target/

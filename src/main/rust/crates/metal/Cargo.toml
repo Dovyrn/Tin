@@ -1,0 +1,14 @@
+[package]
+name = "tin-metal"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "metal"
+
+[dependencies]
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-metal = { workspace = true }
+objc2-quartz-core = { workspace = true }
+block2 = { workspace = true }

@@ -1,0 +1,6 @@
+max_width = 120
+fn_call_width = 110
+struct_lit_width = 100
+array_width = 110
+chain_width = 110
+fn_params_layout = "Compressed"

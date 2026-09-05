@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "tin",
+  "version": "${version}",
+  "name": "Tin",
+  "description": "",
+  "authors": [],
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.dov.tin.TinClient"
+    ]
+  },
+  "mixins": [
+    "tin.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric-api": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
