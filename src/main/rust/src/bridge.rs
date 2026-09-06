@@ -8,7 +8,8 @@ use metal::buffer::Buffer;
 use metal::device::Device;
 use metal::encoder::Encoder;
 use metal::queries::Queries;
-use metal::sampler::{Address, Filter};
+
+use metal::sampler::{Address, Filter, Sampler};
 use metal::surface::{Present, Surface};
 use metal::texture::Texture;
 use metal::view::View;
@@ -589,42 +590,28 @@ entries! {
         todo!()
     }
 
-    nBufferClosed(_env, _class, buffer: jlong) -> jboolean {
-        todo!()
-    }
-
-    nBufferClose(_env, _class, buffer: jlong) {
-        todo!()
+    nBufferClose(_env, _class, handle: jlong) {
+        drop(unsafe { Box::from_raw(handle as *mut Buffer) });
     }
 
     nBufferMap(_env, _class,
-        buffer: jlong, offset: jlong, length: jlong, read: jboolean, write: jboolean,
+        handle: jlong, offset: jlong, length: jlong, read: jboolean, write: jboolean,
     ) -> jlong {
-        todo!()
+        buffer(handle).map(offset as u64) as jlong
     }
 
-    nBufferUnmap(_env, _class, buffer: jlong) {
-        todo!()
+    nBufferUnmap(_env, _class, handle: jlong) {}
+
+    nTextureClose(_env, _class, handle: jlong) {
+        drop(unsafe { Box::from_raw(handle as *mut Texture) });
     }
 
-    nTextureClosed(_env, _class, texture: jlong) -> jboolean {
-        todo!()
+    nViewClose(_env, _class, handle: jlong) {
+        drop(unsafe { Box::from_raw(handle as *mut View) });
     }
 
-    nTextureClose(_env, _class, texture: jlong) {
-        todo!()
-    }
-
-    nViewClosed(_env, _class, view: jlong) -> jboolean {
-        todo!()
-    }
-
-    nViewClose(_env, _class, view: jlong) {
-        todo!()
-    }
-
-    nSamplerClose(_env, _class, sampler: jlong) {
-        todo!()
+    nSamplerClose(_env, _class, handle: jlong) {
+        drop(unsafe { Box::from_raw(handle as *mut Sampler) });
     }
 
     nQueriesValues(_env, _class, queries: jlong, index: jint, count: jint) -> JLongArray<'l> {

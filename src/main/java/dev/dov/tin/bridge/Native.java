@@ -167,7 +167,6 @@ public class Native {
 
     public native long[] nMemoryMultiGpu(long memory, long[] addresses, int[] sizes, long alignment, int usage);
 
-    public native boolean nBufferClosed(long buffer);
 
     public native void nBufferClose(long buffer);
 
@@ -175,11 +174,9 @@ public class Native {
 
     public native void nBufferUnmap(long buffer);
 
-    public native boolean nTextureClosed(long texture);
 
     public native void nTextureClose(long texture);
 
-    public native boolean nViewClosed(long view);
 
     public native void nViewClose(long view);
 

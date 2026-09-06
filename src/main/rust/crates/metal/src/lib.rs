@@ -5,6 +5,7 @@ pub mod buffer;
 pub mod device;
 pub mod encoder;
 pub mod fence;
+pub mod format;
 pub mod memory;
 pub mod pass;
 pub mod pipeline;

@@ -8,6 +8,7 @@ import lombok.Getter;
 public class MTLView extends GpuTextureView {
     @Getter
     private final long handle;
+    private boolean closed;
 
     public MTLView(long handle, GpuTexture texture, int baseMip, int mips) {
         super(texture, baseMip, mips);
@@ -16,11 +17,14 @@ public class MTLView extends GpuTextureView {
 
     @Override
     public void close() {
-        Native.nViewClose(handle);
+        if (!closed) {
+            closed = true;
+            Native.nViewClose(handle);
+        }
     }
 
     @Override
     public boolean isClosed() {
-        return Native.nViewClosed(handle);
+        return closed;
     }
 }

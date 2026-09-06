@@ -9,6 +9,7 @@ import org.lwjgl.system.MemoryUtil;
 public class MTLBuffer extends GpuBuffer {
     @Getter
     private final long handle;
+    private boolean closed;
 
     public MTLBuffer(long handle, int usage, long size) {
         super(usage, size);
@@ -17,12 +18,15 @@ public class MTLBuffer extends GpuBuffer {
 
     @Override
     public boolean isClosed() {
-        return Native.nBufferClosed(handle);
+        return closed;
     }
 
     @Override
     public void close() {
-        Native.nBufferClose(handle);
+        if (!closed) {
+            closed = true;
+            Native.nBufferClose(handle);
+        }
     }
 
     @Override
