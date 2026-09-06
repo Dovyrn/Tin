@@ -1,11 +1,15 @@
 #![allow(clippy::todo, clippy::too_many_arguments, unused_variables)]
 
-use jni::errors::ThrowRuntimeExAndDefault;
+use jni::errors::{Error, ThrowRuntimeExAndDefault};
 use jni::objects::{JClass, JFloatArray, JIntArray, JLongArray, JObject, JObjectArray, JString};
 use jni::sys::{jboolean, jdouble, jfloat, jint, jlong};
-use jni::EnvUnowned;
+use jni::{Env, EnvUnowned};
 use metal::device::Device;
+use metal::encoder::Encoder;
+use metal::sampler::{Address, Filter};
 use metal::surface::{Present, Surface};
+use metal::texture::Texture;
+use metal::view::View;
 use objc2_app_kit::NSWindow;
 
 const IMMEDIATE: jint = 0;
@@ -13,6 +17,64 @@ const FIFO: jint = 2;
 
 fn device<'a>(handle: jlong) -> &'a Device {
     unsafe { &*(handle as *const Device) }
+}
+
+fn texture<'a>(handle: jlong) -> &'a Texture {
+    unsafe { &*(handle as *const Texture) }
+}
+
+fn view<'a>(handle: jlong) -> &'a View {
+    unsafe { &*(handle as *const View) }
+}
+
+fn boxed<T>(value: T) -> jlong {
+    Box::into_raw(Box::new(value)) as jlong
+}
+
+fn text(env: &Env, s: &JString) -> Result<String, Error> {
+    Ok(s.mutf8_chars(env)?.to_str().into_owned())
+}
+
+fn ints(env: &Env, a: &JIntArray) -> Result<Vec<i32>, Error> {
+    let mut out = vec![0; a.len(env)?];
+    a.get_region(env, 0, &mut out)?;
+    Ok(out)
+}
+
+fn address(ordinal: jint) -> Address {
+    match ordinal {
+        0 => Address::Repeat,
+        1 => Address::Clamp,
+        _ => unreachable!("address mode {ordinal}"),
+    }
+}
+
+fn filter(ordinal: jint) -> Filter {
+    match ordinal {
+        0 => Filter::Nearest,
+        1 => Filter::Linear,
+        _ => unreachable!("filter {ordinal}"),
+    }
+}
+
+fn ordinal(mode: Present) -> jint {
+    match mode {
+        Present::Immediate => IMMEDIATE,
+        Present::Fifo => FIFO,
+    }
+}
+
+fn strings<'l>(env: &mut Env<'l>, items: &[String]) -> Result<JObjectArray<'l, JString<'l>>, Error> {
+    let out = JObjectArray::<JString>::new(env, items.len(), JString::null())?;
+    for (i, item) in items.iter().enumerate() {
+        let value = env.new_string(item)?;
+        out.set_element(env, i, value)?;
+    }
+    Ok(out)
+}
+
+fn encoder<'a>(handle: jlong) -> &'a mut Encoder {
+    unsafe { &mut *(handle as *mut Encoder) }
 }
 
 fn surface<'a>(handle: jlong) -> &'a mut Surface {
@@ -43,7 +105,7 @@ entries! {
     nDeviceCreate(_env, _class,
         window: jlong, log_level: jint, sync_logs: jboolean, labels: jboolean, validation: jboolean,
     ) -> jlong {
-        Box::into_raw(Box::new(Device::new())) as jlong
+        boxed(Device::new(validation))
     }
 
     nDeviceSurface(_env, _class, handle: jlong, window: jlong) -> jlong {
@@ -52,80 +114,118 @@ entries! {
         Box::into_raw(Box::new(surface)) as jlong
     }
 
-    nDeviceEncoder(_env, _class, device: jlong) -> jlong {
-        todo!()
+    nDeviceEncoder(_env, _class, handle: jlong) -> jlong {
+        Box::into_raw(Box::new(Encoder::new(device(handle).queue.clone()))) as jlong
     }
 
     nDeviceSampler(_env, _class,
-        device: jlong, u: jint, v: jint, min: jint, mag: jint, anisotropy: jint, has_lod: jboolean, max_lod: jdouble,
+        handle: jlong, u: jint, v: jint, min: jint, mag: jint, anisotropy: jint, has_lod: jboolean, max_lod: jdouble,
     ) -> jlong {
-        todo!()
+        let lod = has_lod.then_some(max_lod as f32);
+        boxed(device(handle).sampler(address(u), address(v), filter(min), filter(mag), anisotropy as u32, lod))
     }
 
-    nDeviceTexture(_env, _class,
-        device: jlong, label: JString<'l>, usage: jint, format: jint, width: jint, height: jint, depth_or_layers: jint, mips: jint,
+    nDeviceTexture(mut env, _class,
+        handle: jlong, label: JString<'l>, usage: jint, format: jint, width: jint, height: jint, layers: jint, mips: jint,
     ) -> jlong {
-        todo!()
+        env.with_env(|env| {
+            let label = text(env, &label)?;
+            let texture = device(handle).texture(
+                &label,
+                usage as u32,
+                format as u32,
+                width as u32,
+                height as u32,
+                layers as u32,
+                mips as u32,
+            );
+            Ok::<_, Error>(boxed(texture))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nDeviceView(_env, _class, device: jlong, texture: jlong, base_mip: jint, mips: jint) -> jlong {
-        todo!()
+    nDeviceView(_env, _class, handle: jlong, texture_handle: jlong, base: jint, mips: jint) -> jlong {
+        boxed(device(handle).view(texture(texture_handle), base as u32, mips as u32))
     }
 
-    nDeviceBuffer(_env, _class, device: jlong, label: JString<'l>, usage: jint, size: jlong) -> jlong {
-        todo!()
+    nDeviceBuffer(mut env, _class, handle: jlong, label: JString<'l>, usage: jint, size: jlong) -> jlong {
+        env.with_env(|env| {
+            let label = text(env, &label)?;
+            Ok::<_, Error>(boxed(device(handle).buffer(&label, usage as u32, size as u64)))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nDeviceBufferData(_env, _class,
-        device: jlong, label: JString<'l>, usage: jint, address: jlong, length: jint,
+    nDeviceBufferData(mut env, _class,
+        handle: jlong, label: JString<'l>, usage: jint, address: jlong, length: jint,
     ) -> jlong {
-        todo!()
+        env.with_env(|env| {
+            let label = text(env, &label)?;
+            let data = unsafe { std::slice::from_raw_parts(address as *const u8, length as usize) };
+            Ok::<_, Error>(boxed(device(handle).buffer_with(&label, usage as u32, data)))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nDeviceMessages(_env, _class, device: jlong) -> JObjectArray<'l, JString<'l>> {
-        todo!()
+    nDeviceMessages(mut env, _class, handle: jlong) -> JObjectArray<'l, JString<'l>> {
+        env.with_env(|env| strings(env, &device(handle).messages())).resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nDeviceDebugging(_env, _class, device: jlong) -> jboolean {
-        todo!()
+    nDeviceDebugging(_env, _class, handle: jlong) -> jboolean {
+        device(handle).debug
     }
 
-    nDevicePipeline(_env, _class,
-        device: jlong, location: JString<'l>, vertex: JString<'l>, fragment: JString<'l>, defines: JString<'l>, state: JIntArray<'l>,
+    nDevicePipeline(mut env, _class,
+        handle: jlong, location: JString<'l>, vertex: JString<'l>, fragment: JString<'l>, defines: JString<'l>, state: JIntArray<'l>,
     ) -> jlong {
-        todo!()
+        env.with_env(|env| {
+            let location = text(env, &location)?;
+            let vertex = text(env, &vertex)?;
+            let fragment = text(env, &fragment)?;
+            let defines = text(env, &defines)?;
+            let state = ints(env, &state)?;
+            let pipeline = device(handle).pipeline(&location, &vertex, &fragment, &defines, &state);
+            Ok::<_, Error>(boxed(pipeline))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nDeviceClearPipelines(_env, _class, device: jlong) {
-        todo!()
+    nDeviceClearPipelines(_env, _class, handle: jlong) {
+        device(handle).clear_pipelines();
     }
 
     nDeviceClose(_env, _class, handle: jlong) {
         drop(unsafe { Box::from_raw(handle as *mut Device) });
     }
 
-    nDeviceQueries(_env, _class, device: jlong, size: jint) -> jlong {
-        todo!()
+    nDeviceQueries(_env, _class, handle: jlong, size: jint) -> jlong {
+        boxed(device(handle).queries(size as u32))
     }
 
-    nDeviceTimestamp(_env, _class, device: jlong) -> jlong {
-        todo!()
+    nDeviceTimestamp(_env, _class, handle: jlong) -> jlong {
+        device(handle).now() as jlong
     }
 
-    nDeviceInfoNumbers(_env, _class, device: jlong) -> JLongArray<'l> {
-        todo!()
+    nDeviceInfoNumbers(mut env, _class, handle: jlong) -> JLongArray<'l> {
+        env.with_env(|env| {
+            let numbers = device(handle).numbers();
+            let out = env.new_long_array(numbers.len())?;
+            out.set_region(env, 0, &numbers)?;
+            Ok::<_, Error>(out)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nDeviceInfoStrings(_env, _class, device: jlong) -> JObjectArray<'l, JString<'l>> {
-        todo!()
+    nDeviceInfoStrings(mut env, _class, handle: jlong) -> JObjectArray<'l, JString<'l>> {
+        env.with_env(|env| strings(env, &device(handle).strings())).resolve::<ThrowRuntimeExAndDefault>()
     }
 
     nPipelineValid(_env, _class, pipeline: jlong) -> jboolean {
         todo!()
     }
 
-    nEncoderSubmit(_env, _class, encoder: jlong) {
-        todo!()
+    nEncoderSubmit(_env, _class, handle: jlong) {
+        encoder(handle).submit();
     }
 
     nEncoderMemory(_env, _class, encoder: jlong) -> jlong {
@@ -317,15 +417,15 @@ entries! {
     }
 
     nSurfaceSuboptimal(_env, _class, handle: jlong) -> jboolean {
-        false as jboolean
+        surface(handle).suboptimal()
     }
 
     nSurfaceAcquire(_env, _class, handle: jlong) {
         assert!(surface(handle).acquire(), "no drawable");
     }
 
-    nSurfaceBlit(_env, _class, handle: jlong, encoder: jlong, view: jlong) {
-        todo!()
+    nSurfaceBlit(_env, _class, handle: jlong, encoder_handle: jlong, view_handle: jlong) {
+        surface(handle).blit(encoder(encoder_handle), view(view_handle));
     }
 
     nSurfacePresent(_env, _class, handle: jlong, device_handle: jlong) {
@@ -338,9 +438,10 @@ entries! {
 
     nSurfaceModes(mut env, _class, handle: jlong) -> JIntArray<'l> {
         env.with_env(|env| {
-            let modes = env.new_int_array(2)?;
-            modes.set_region(env, 0, &[IMMEDIATE, FIFO])?;
-            Ok::<_, jni::errors::Error>(modes)
+            let modes: Vec<jint> = surface(handle).modes().iter().map(|&m| ordinal(m)).collect();
+            let out = env.new_int_array(modes.len())?;
+            out.set_region(env, 0, &modes)?;
+            Ok::<_, Error>(out)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
     }
