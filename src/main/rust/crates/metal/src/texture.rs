@@ -6,6 +6,8 @@ use objc2_metal::MTLTexture;
 pub struct Texture {
     pub raw: Retained<ProtocolObject<dyn MTLTexture>>,
     pub pixel: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 impl Texture {

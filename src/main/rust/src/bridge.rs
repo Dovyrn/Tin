@@ -3,9 +3,11 @@
 use jni::errors::{Error, ThrowRuntimeExAndDefault};
 use jni::objects::{JClass, JFloatArray, JIntArray, JLongArray, JObject, JObjectArray, JString};
 use jni::sys::{jboolean, jdouble, jfloat, jint, jlong};
-use jni::{Env, EnvUnowned};
+use jni::{jni_sig, jni_str, Env, EnvUnowned, JavaVM};
+use metal::buffer::Buffer;
 use metal::device::Device;
 use metal::encoder::Encoder;
+use metal::queries::Queries;
 use metal::sampler::{Address, Filter};
 use metal::surface::{Present, Surface};
 use metal::texture::Texture;
@@ -17,6 +19,42 @@ const FIFO: jint = 2;
 
 fn device<'a>(handle: jlong) -> &'a Device {
     unsafe { &*(handle as *const Device) }
+}
+
+fn buffer<'a>(handle: jlong) -> &'a Buffer {
+    unsafe { &*(handle as *const Buffer) }
+}
+
+fn queries<'a>(handle: jlong) -> &'a Queries {
+    unsafe { &*(handle as *const Queries) }
+}
+
+fn bytes<'a>(address: jlong, length: jint) -> &'a [u8] {
+    unsafe { std::slice::from_raw_parts(address as *const u8, length as usize) }
+}
+
+fn longs(env: &Env, a: &JLongArray) -> Result<Vec<i64>, Error> {
+    let mut out = vec![0; a.len(env)?];
+    a.get_region(env, 0, &mut out)?;
+    Ok(out)
+}
+
+fn floats(env: &Env, a: &JFloatArray) -> Result<Vec<f32>, Error> {
+    let mut out = vec![0.0; a.len(env)?];
+    a.get_region(env, 0, &mut out)?;
+    Ok(out)
+}
+
+fn runnable(env: &Env, callback: JObject) -> Result<Box<dyn FnOnce() + Send>, Error> {
+    let vm: JavaVM = env.get_java_vm()?;
+    let callback = env.new_global_ref(callback)?;
+    Ok(Box::new(move || {
+        vm.attach_current_thread(|env| {
+            env.call_method(callback.as_obj(), jni_str!("run"), jni_sig!(() -> void), &[])?;
+            Ok::<_, Error>(())
+        })
+        .expect("callback");
+    }))
 }
 
 fn texture<'a>(handle: jlong) -> &'a Texture {
@@ -115,7 +153,7 @@ entries! {
     }
 
     nDeviceEncoder(_env, _class, handle: jlong) -> jlong {
-        Box::into_raw(Box::new(Encoder::new(device(handle).queue.clone()))) as jlong
+        boxed(Encoder::new(device(handle)))
     }
 
     nDeviceSampler(_env, _class,
@@ -228,88 +266,145 @@ entries! {
         encoder(handle).submit();
     }
 
-    nEncoderMemory(_env, _class, encoder: jlong) -> jlong {
-        todo!()
+    nEncoderMemory(_env, _class, handle: jlong) -> jlong {
+        &mut encoder(handle).memory as *mut _ as jlong
     }
 
-    nEncoderPass(_env, _class,
-        encoder: jlong, label: JString<'l>, views: JLongArray<'l>, clears: JFloatArray<'l>, area: JIntArray<'l>,
+    nEncoderPass(mut env, _class,
+        handle: jlong, label: JString<'l>, views: JLongArray<'l>, clears: JFloatArray<'l>, area: JIntArray<'l>,
     ) -> jlong {
-        todo!()
+        env.with_env(|env| {
+            let label = text(env, &label)?;
+            let views = longs(env, &views)?;
+            let clears = floats(env, &clears)?;
+            let area = ints(env, &area)?;
+            let area = [area[0], area[1], area[2], area[3]];
+            let pass = encoder(handle).begin_pass(&label, &views, &clears, area);
+            Ok::<_, Error>(pass as *mut _ as jlong)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nEncoderSubmitPass(_env, _class, encoder: jlong) {
-        todo!()
+    nEncoderSubmitPass(_env, _class, handle: jlong) {
+        encoder(handle).end_pass();
     }
 
-    nEncoderClearColor(_env, _class, encoder: jlong, texture: jlong, r: jfloat, g: jfloat, b: jfloat, a: jfloat) {
-        todo!()
+    nEncoderClearColor(_env, _class, handle: jlong, color: jlong, r: jfloat, g: jfloat, b: jfloat, a: jfloat) {
+        encoder(handle).clear_color(texture(color), [r, g, b, a]);
     }
 
     nEncoderClearColorDepth(_env, _class,
-        encoder: jlong, color: jlong, r: jfloat, g: jfloat, b: jfloat, a: jfloat, depth: jlong, value: jdouble,
+        handle: jlong, color: jlong, r: jfloat, g: jfloat, b: jfloat, a: jfloat, depth: jlong, value: jdouble,
     ) {
-        todo!()
+        encoder(handle).clear_both(texture(color), [r, g, b, a], texture(depth), value);
     }
 
     nEncoderClearColorDepthRegion(_env, _class,
-        encoder: jlong, color: jlong, r: jfloat, g: jfloat, b: jfloat, a: jfloat, depth: jlong, value: jdouble, x: jint, y: jint, width: jint, height: jint,
+        handle: jlong, color: jlong, r: jfloat, g: jfloat, b: jfloat, a: jfloat, depth: jlong, value: jdouble, x: jint, y: jint, width: jint, height: jint,
     ) {
-        todo!()
+        encoder(handle).clear_region(texture(color), [r, g, b, a], texture(depth), value, x, y, width, height);
     }
 
-    nEncoderClearDepth(_env, _class, encoder: jlong, texture: jlong, value: jdouble) {
-        todo!()
+    nEncoderClearDepth(_env, _class, handle: jlong, depth: jlong, value: jdouble) {
+        encoder(handle).clear_depth(texture(depth), value);
     }
 
     nEncoderWriteBuffer(_env, _class,
-        encoder: jlong, buffer: jlong, offset: jlong, length: jlong, address: jlong, size: jint,
+        handle: jlong, target: jlong, offset: jlong, length: jlong, address: jlong, size: jint,
     ) {
-        todo!()
+        assert!(size as jlong <= length, "write past buffer slice");
+        encoder(handle).write_buffer(buffer(target), offset as u64, bytes(address, size));
     }
 
     nEncoderCopyBuffer(_env, _class,
-        encoder: jlong, source: jlong, source_offset: jlong, source_length: jlong, target: jlong, target_offset: jlong, target_length: jlong,
+        handle: jlong, source: jlong, source_offset: jlong, source_length: jlong, target: jlong, target_offset: jlong, target_length: jlong,
     ) {
-        todo!()
+        assert!(source_length <= target_length, "copy past buffer slice");
+        encoder(handle).copy_buffer(buffer(source), source_offset as u64, buffer(target), target_offset as u64, source_length as u64);
     }
 
     nEncoderWriteTexture(_env, _class,
-        encoder: jlong, texture: jlong, address: jlong, size: jint, mip: jint, layer: jint, x: jint, y: jint, width: jint, height: jint,
+        handle: jlong, target: jlong, address: jlong, size: jint, mip: jint, layer: jint, x: jint, y: jint, width: jint, height: jint,
     ) {
-        todo!()
+        let data = bytes(address, size);
+        encoder(handle).write_texture(texture(target), data, mip as u32, layer as u32, x as u32, y as u32, width as u32, height as u32);
     }
 
     nEncoderCopyBufferTexture(_env, _class,
-        encoder: jlong, buffer: jlong, offset: jlong, length: jlong, source_x: jint, source_y: jint, source_width: jint, source_height: jint, texture: jlong, x: jint, y: jint, width: jint, height: jint, mip: jint, layer: jint,
+        handle: jlong, source: jlong, offset: jlong, length: jlong, source_x: jint, source_y: jint, source_width: jint, source_height: jint, target: jlong, x: jint, y: jint, width: jint, height: jint, mip: jint, layer: jint,
     ) {
-        todo!()
+        encoder(handle).copy_buffer_texture(
+            buffer(source),
+            offset as u64,
+            source_x as u32,
+            source_y as u32,
+            source_width as u32,
+            texture(target),
+            x as u32,
+            y as u32,
+            width as u32,
+            height as u32,
+            mip as u32,
+            layer as u32,
+        );
     }
 
-    nEncoderCopyTextureBuffer(_env, _class,
-        encoder: jlong, texture: jlong, buffer: jlong, offset: jlong, callback: JObject<'l>, mip: jint,
+    nEncoderCopyTextureBuffer(mut env, _class,
+        handle: jlong, source: jlong, target: jlong, offset: jlong, callback: JObject<'l>, mip: jint,
     ) {
-        todo!()
+        env.with_env(|env| {
+            let done = runnable(env, callback)?;
+            let source = texture(source);
+            let (width, height) = (source.width >> mip, source.height >> mip);
+            encoder(handle).copy_texture_buffer(source, buffer(target), offset as u64, mip as u32, 0, 0, width, height, done);
+            Ok::<_, Error>(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nEncoderCopyTextureBufferRegion(_env, _class,
-        encoder: jlong, texture: jlong, buffer: jlong, offset: jlong, callback: JObject<'l>, mip: jint, x: jint, y: jint, width: jint, height: jint,
+    nEncoderCopyTextureBufferRegion(mut env, _class,
+        handle: jlong, source: jlong, target: jlong, offset: jlong, callback: JObject<'l>, mip: jint, x: jint, y: jint, width: jint, height: jint,
     ) {
-        todo!()
+        env.with_env(|env| {
+            let done = runnable(env, callback)?;
+            encoder(handle).copy_texture_buffer(
+                texture(source),
+                buffer(target),
+                offset as u64,
+                mip as u32,
+                x as u32,
+                y as u32,
+                width as u32,
+                height as u32,
+                done,
+            );
+            Ok::<_, Error>(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
     nEncoderCopyTexture(_env, _class,
-        encoder: jlong, source: jlong, target: jlong, mip: jint, x: jint, y: jint, source_x: jint, source_y: jint, width: jint, height: jint,
+        handle: jlong, source: jlong, target: jlong, mip: jint, x: jint, y: jint, source_x: jint, source_y: jint, width: jint, height: jint,
     ) {
-        todo!()
+        encoder(handle).copy_texture(
+            texture(source),
+            texture(target),
+            mip as u32,
+            x as u32,
+            y as u32,
+            source_x as u32,
+            source_y as u32,
+            width as u32,
+            height as u32,
+        );
     }
 
-    nEncoderFence(_env, _class, encoder: jlong) -> jlong {
-        todo!()
+    nEncoderFence(_env, _class, handle: jlong) -> jlong {
+        boxed(encoder(handle).fence())
     }
 
-    nEncoderTimestamp(_env, _class, encoder: jlong, queries: jlong, index: jint) {
-        todo!()
+    nEncoderTimestamp(_env, _class, handle: jlong, pool: jlong, index: jint) {
+        encoder(handle).timestamp(queries(pool), index as u32);
     }
 
     nFenceAwait(_env, _class, fence: jlong, timeout_ms: jlong) -> jboolean {
