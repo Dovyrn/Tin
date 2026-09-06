@@ -69,7 +69,7 @@ public class MTLEncoder implements CommandEncoderBackend {
             }
         }
         var area = descriptor.renderArea;
-        int[] rect = {area.x(), area.y(), area.width(), area.height()};
+        int[] rect = area == null ? new int[4] : new int[] {area.x(), area.y(), area.width(), area.height()};
         return new MTLPass(Native.nEncoderPass(handle, descriptor.label().get(), views, clears, rect), device);
     }
 

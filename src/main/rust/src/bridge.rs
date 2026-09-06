@@ -7,6 +7,9 @@ use jni::{jni_sig, jni_str, Env, EnvUnowned, JavaVM};
 use metal::buffer::Buffer;
 use metal::device::Device;
 use metal::encoder::Encoder;
+use metal::memory::{Memory, Slice};
+use metal::pass::{Color, Depth, Index, Pass};
+use metal::pipeline::Pipeline;
 use metal::queries::Queries;
 
 use metal::sampler::{Address, Filter, Sampler};
@@ -56,6 +59,46 @@ fn runnable(env: &Env, callback: JObject) -> Result<Box<dyn FnOnce() + Send>, Er
         })
         .expect("callback");
     }))
+}
+
+fn memory<'a>(handle: jlong) -> &'a mut Memory {
+    unsafe { &mut *(handle as *mut Memory) }
+}
+
+fn pass<'a>(handle: jlong) -> &'a mut Pass {
+    unsafe { &mut *(handle as *mut Pass) }
+}
+
+fn pipeline<'a>(handle: jlong) -> &'a Pipeline {
+    unsafe { &*(handle as *const Pipeline) }
+}
+
+fn sampler<'a>(handle: jlong) -> &'a Sampler {
+    unsafe { &*(handle as *const Sampler) }
+}
+
+fn index(ordinal: jint) -> Index {
+    match ordinal {
+        0 => Index::Short,
+        1 => Index::Int,
+        _ => unreachable!("index type {ordinal}"),
+    }
+}
+
+fn parts<'a>(env: &Env, addresses: &JLongArray, sizes: &JIntArray) -> Result<Vec<&'a [u8]>, Error> {
+    let addresses = longs(env, addresses)?;
+    let sizes = ints(env, sizes)?;
+    Ok(addresses.iter().zip(&sizes).map(|(&a, &n)| bytes(a, n)).collect())
+}
+
+fn slices<'l>(env: &mut Env<'l>, items: &[Slice]) -> Result<JLongArray<'l>, Error> {
+    let mut out = Vec::with_capacity(items.len() * 4);
+    for s in items {
+        out.extend([s.buffer as jlong, s.offset as jlong, s.size as jlong, s.address as jlong]);
+    }
+    let array = env.new_long_array(out.len())?;
+    array.set_region(env, 0, &out)?;
+    Ok(array)
 }
 
 fn texture<'a>(handle: jlong) -> &'a Texture {
@@ -280,7 +323,18 @@ entries! {
             let clears = floats(env, &clears)?;
             let area = ints(env, &area)?;
             let area = [area[0], area[1], area[2], area[3]];
-            let pass = encoder(handle).begin_pass(&label, &views, &clears, area);
+            let n = views.len() - 1;
+            let colors: Vec<Color> = (0..n)
+                .map(|i| Color {
+                    view: (views[i] != 0).then(|| view(views[i])),
+                    clear: (clears[i * 5] != 0.0).then(|| [clears[i * 5 + 1], clears[i * 5 + 2], clears[i * 5 + 3], clears[i * 5 + 4]]),
+                })
+                .collect();
+            let depth = (views[n] != 0).then(|| Depth {
+                view: view(views[n]),
+                clear: (clears[n * 5] != 0.0).then_some(clears[n * 5 + 1] as f64),
+            });
+            let pass = encoder(handle).begin_pass(&label, &colors, depth, area);
             Ok::<_, Error>(pass as *mut _ as jlong)
         })
         .resolve::<ThrowRuntimeExAndDefault>()
@@ -416,96 +470,130 @@ entries! {
         todo!()
     }
 
-    nPassPush(_env, _class, pass: jlong, label: JString<'l>) {
-        todo!()
+    nPassPush(mut env, _class, handle: jlong, label: JString<'l>) {
+        env.with_env(|env| {
+            pass(handle).push(&text(env, &label)?);
+            Ok::<_, Error>(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nPassPop(_env, _class, pass: jlong) {
-        todo!()
+    nPassPop(_env, _class, handle: jlong) {
+        pass(handle).pop();
     }
 
-    nPassPipeline(_env, _class, pass: jlong, pipeline: jlong) {
-        todo!()
+    nPassPipeline(_env, _class, handle: jlong, pipeline_handle: jlong) {
+        pass(handle).set_pipeline(pipeline(pipeline_handle));
     }
 
-    nPassTexture(_env, _class, pass: jlong, name: JString<'l>, view: jlong, sampler: jlong) {
-        todo!()
+    nPassTexture(mut env, _class, handle: jlong, name: JString<'l>, view_handle: jlong, sampler_handle: jlong) {
+        env.with_env(|env| {
+            let name = text(env, &name)?;
+            let view = (view_handle != 0).then(|| view(view_handle));
+            let sampler = (sampler_handle != 0).then(|| sampler(sampler_handle));
+            pass(handle).set_texture(&name, view, sampler);
+            Ok::<_, Error>(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nPassUniform(_env, _class, pass: jlong, name: JString<'l>, buffer: jlong, offset: jlong, length: jlong) {
-        todo!()
+    nPassUniform(mut env, _class, handle: jlong, name: JString<'l>, buffer_handle: jlong, offset: jlong, length: jlong) {
+        env.with_env(|env| {
+            let name = text(env, &name)?;
+            pass(handle).set_uniform(&name, buffer(buffer_handle), offset as u64);
+            Ok::<_, Error>(())
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nPassScissor(_env, _class, pass: jlong, x: jint, y: jint, width: jint, height: jint) {
-        todo!()
+    nPassScissor(_env, _class, handle: jlong, x: jint, y: jint, width: jint, height: jint) {
+        pass(handle).scissor(x, y, width, height);
     }
 
-    nPassNoScissor(_env, _class, pass: jlong) {
-        todo!()
+    nPassNoScissor(_env, _class, handle: jlong) {
+        pass(handle).no_scissor();
     }
 
-    nPassVertex(_env, _class, pass: jlong, slot: jint, buffer: jlong, offset: jlong, length: jlong) {
-        todo!()
+    nPassVertex(_env, _class, handle: jlong, slot: jint, buffer_handle: jlong, offset: jlong, length: jlong) {
+        let buffer = (buffer_handle != 0).then(|| buffer(buffer_handle));
+        pass(handle).set_vertex(slot as u32, buffer, offset as u64);
     }
 
-    nPassIndex(_env, _class, pass: jlong, buffer: jlong, kind: jint) {
-        todo!()
+    nPassIndex(_env, _class, handle: jlong, buffer_handle: jlong, kind: jint) {
+        pass(handle).set_index(buffer(buffer_handle), index(kind));
     }
 
     nPassDrawIndexed(_env, _class,
-        pass: jlong, index_count: jint, instance_count: jint, first_index: jint, vertex_offset: jint, first_instance: jint,
+        handle: jlong, index_count: jint, instance_count: jint, first_index: jint, vertex_offset: jint, first_instance: jint,
     ) {
-        todo!()
+        pass(handle).draw_indexed(index_count as u32, instance_count as u32, first_index as u32, vertex_offset, first_instance as u32);
     }
 
     nPassMultiDrawIndexed(_env, _class,
-        pass: jlong, params: jlong, instance_count: jint, first_instance: jint, draw_count: jint,
+        handle: jlong, params: jlong, instance_count: jint, first_instance: jint, draw_count: jint,
     ) {
-        todo!()
+        let params = unsafe { std::slice::from_raw_parts(params as *const i32, draw_count as usize * 3) };
+        pass(handle).multi_draw_indexed(params, instance_count as u32, first_instance as u32);
     }
 
     nPassMultiDrawIndexedSeparate(_env, _class,
-        pass: jlong, first_index_offsets: jlong, index_counts: jlong, vertex_offsets: jlong, draw_count: jint,
+        handle: jlong, first_index_offsets: jlong, index_counts: jlong, vertex_offsets: jlong, draw_count: jint,
     ) {
-        todo!()
+        let n = draw_count as usize;
+        let offsets = unsafe { std::slice::from_raw_parts(first_index_offsets as *const u64, n) };
+        let counts = unsafe { std::slice::from_raw_parts(index_counts as *const i32, n) };
+        let bases = unsafe { std::slice::from_raw_parts(vertex_offsets as *const i32, n) };
+        pass(handle).multi_draw_indexed_separate(offsets, counts, bases);
     }
 
     nPassDrawIndexedIndirect(_env, _class,
-        pass: jlong, buffer: jlong, offset: jlong, length: jlong, draw_count: jint,
+        handle: jlong, buffer_handle: jlong, offset: jlong, length: jlong, draw_count: jint,
     ) {
-        todo!()
+        pass(handle).draw_indexed_indirect(buffer(buffer_handle), offset as u64, draw_count as u32);
     }
 
     nPassDrawOne(_env, _class,
-        pass: jlong, slot: jint, vertex: jlong, index: jlong, kind: jint, first_index: jint, index_count: jint, base_vertex: jint,
+        handle: jlong, slot: jint, vertex: jlong, index_handle: jlong, kind: jint, first_index: jint, index_count: jint, base_vertex: jint,
     ) {
-        todo!()
+        pass(handle).draw_one(
+            slot as u32,
+            buffer(vertex),
+            buffer(index_handle),
+            index(kind),
+            first_index as u32,
+            index_count as u32,
+            base_vertex,
+        );
     }
 
     nPassDraw(_env, _class,
-        pass: jlong, vertex_count: jint, instance_count: jint, first_vertex: jint, first_instance: jint,
+        handle: jlong, vertex_count: jint, instance_count: jint, first_vertex: jint, first_instance: jint,
     ) {
-        todo!()
+        pass(handle).draw(vertex_count as u32, instance_count as u32, first_vertex as u32, first_instance as u32);
     }
 
     nPassMultiDraw(_env, _class,
-        pass: jlong, params: jlong, instance_count: jint, first_instance: jint, draw_count: jint,
+        handle: jlong, params: jlong, instance_count: jint, first_instance: jint, draw_count: jint,
     ) {
-        todo!()
+        let params = unsafe { std::slice::from_raw_parts(params as *const i32, draw_count as usize * 2) };
+        pass(handle).multi_draw(params, instance_count as u32, first_instance as u32);
     }
 
     nPassMultiDrawSeparate(_env, _class,
-        pass: jlong, first_vertices: jlong, vertex_counts: jlong, draw_count: jint,
+        handle: jlong, first_vertices: jlong, vertex_counts: jlong, draw_count: jint,
     ) {
-        todo!()
+        let n = draw_count as usize;
+        let firsts = unsafe { std::slice::from_raw_parts(first_vertices as *const i32, n) };
+        let counts = unsafe { std::slice::from_raw_parts(vertex_counts as *const i32, n) };
+        pass(handle).multi_draw_separate(firsts, counts);
     }
 
-    nPassDrawIndirect(_env, _class, pass: jlong, buffer: jlong, offset: jlong, length: jlong, draw_count: jint) {
-        todo!()
+    nPassDrawIndirect(_env, _class, handle: jlong, buffer_handle: jlong, offset: jlong, length: jlong, draw_count: jint) {
+        pass(handle).draw_indirect(buffer(buffer_handle), offset as u64, draw_count as u32);
     }
 
-    nPassTimestamp(_env, _class, pass: jlong, queries: jlong, index: jint) {
-        todo!()
+    nPassTimestamp(_env, _class, handle: jlong, pool: jlong, index: jint) {
+        pass(handle).timestamp(queries(pool), index as u32);
     }
 
     nSurfaceConfigure(_env, _class, handle: jlong, width: jint, height: jint, mode: jint) {
@@ -543,51 +631,72 @@ entries! {
     }
 
     nMemoryCpu(_env, _class,
-        memory: jlong, size: jlong, alignment: jlong, minimum: jlong, element: jlong,
+        handle: jlong, size: jlong, alignment: jlong, minimum: jlong, element: jlong,
     ) -> jlong {
-        todo!()
+        memory(handle).cpu(size as u64, alignment as u64, minimum as u64, element as u64) as jlong
     }
 
-    nMemoryStaging(_env, _class,
-        memory: jlong, size: jlong, alignment: jlong, usage: jint, minimum: jlong, element: jlong,
+    nMemoryStaging(mut env, _class,
+        handle: jlong, size: jlong, alignment: jlong, usage: jint, minimum: jlong, element: jlong,
     ) -> JLongArray<'l> {
-        todo!()
+        let slice = memory(handle).gpu(size as u64, alignment as u64, minimum as u64, element as u64);
+        env.with_env(|env| slices(env, &[slice])).resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nMemoryGpu(_env, _class,
-        memory: jlong, size: jlong, alignment: jlong, usage: jint, minimum: jlong, element: jlong,
+    nMemoryGpu(mut env, _class,
+        handle: jlong, size: jlong, alignment: jlong, usage: jint, minimum: jlong, element: jlong,
     ) -> JLongArray<'l> {
-        todo!()
+        let slice = memory(handle).gpu(size as u64, alignment as u64, minimum as u64, element as u64);
+        env.with_env(|env| slices(env, &[slice])).resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nMemoryGpuMapped(_env, _class,
-        memory: jlong, size: jlong, alignment: jlong, usage: jint, minimum: jlong, element: jlong,
+    nMemoryGpuMapped(mut env, _class,
+        handle: jlong, size: jlong, alignment: jlong, usage: jint, minimum: jlong, element: jlong,
     ) -> JLongArray<'l> {
-        todo!()
+        let slice = memory(handle).gpu(size as u64, alignment as u64, minimum as u64, element as u64);
+        env.with_env(|env| slices(env, &[slice])).resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nMemoryUploadStaging(_env, _class,
-        memory: jlong, addresses: JLongArray<'l>, sizes: JIntArray<'l>, alignment: jlong, usage: jint, minimum: jlong, element: jlong,
+    nMemoryUploadStaging(mut env, _class,
+        handle: jlong, addresses: JLongArray<'l>, sizes: JIntArray<'l>, alignment: jlong, usage: jint, minimum: jlong, element: jlong,
     ) -> JLongArray<'l> {
-        todo!()
+        env.with_env(|env| {
+            let parts = parts(env, &addresses, &sizes)?;
+            let slice = memory(handle).upload(&parts, alignment as u64, minimum as u64, element as u64);
+            slices(env, &[slice])
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nMemoryUploadGpu(_env, _class,
-        memory: jlong, addresses: JLongArray<'l>, sizes: JIntArray<'l>, alignment: jlong, usage: jint, minimum: jlong, element: jlong,
+    nMemoryUploadGpu(mut env, _class,
+        handle: jlong, addresses: JLongArray<'l>, sizes: JIntArray<'l>, alignment: jlong, usage: jint, minimum: jlong, element: jlong,
     ) -> JLongArray<'l> {
-        todo!()
+        env.with_env(|env| {
+            let parts = parts(env, &addresses, &sizes)?;
+            let slice = memory(handle).upload(&parts, alignment as u64, minimum as u64, element as u64);
+            slices(env, &[slice])
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nMemoryMultiStaging(_env, _class,
-        memory: jlong, addresses: JLongArray<'l>, sizes: JIntArray<'l>, alignment: jlong, usage: jint,
+    nMemoryMultiStaging(mut env, _class,
+        handle: jlong, addresses: JLongArray<'l>, sizes: JIntArray<'l>, alignment: jlong, usage: jint,
     ) -> JLongArray<'l> {
-        todo!()
+        env.with_env(|env| {
+            let parts = parts(env, &addresses, &sizes)?;
+            slices(env, &memory(handle).multi_upload(&parts, alignment as u64))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nMemoryMultiGpu(_env, _class,
-        memory: jlong, addresses: JLongArray<'l>, sizes: JIntArray<'l>, alignment: jlong, usage: jint,
+    nMemoryMultiGpu(mut env, _class,
+        handle: jlong, addresses: JLongArray<'l>, sizes: JIntArray<'l>, alignment: jlong, usage: jint,
     ) -> JLongArray<'l> {
-        todo!()
+        env.with_env(|env| {
+            let parts = parts(env, &addresses, &sizes)?;
+            slices(env, &memory(handle).multi_upload(&parts, alignment as u64))
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
     nBufferClose(_env, _class, handle: jlong) {

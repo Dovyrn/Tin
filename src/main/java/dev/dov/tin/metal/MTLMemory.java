@@ -84,7 +84,7 @@ public class MTLMemory implements TransientMemory {
 
     private List<GpuBufferSlice> slices(long[] out, int usage) {
         var list = new ArrayList<GpuBufferSlice>();
-        for (int i = 0; i < out.length; i += 3) {
+        for (int i = 0; i < out.length; i += 4) {
             list.add(slice(out, i, usage));
         }
         return list;

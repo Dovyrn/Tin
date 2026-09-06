@@ -1,4 +1,3 @@
-use crate::device::Device;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
@@ -12,19 +11,18 @@ pub struct Buffer {
 }
 
 impl Buffer {
-    pub fn new(device: &Device, label: &str, usage: u32, size: u64) -> Self {
+    pub fn new(device: &ProtocolObject<dyn MTLDevice>, label: &str, usage: u32, size: u64) -> Self {
         let raw = device
-            .device
             .newBufferWithLength_options(size.max(1) as usize, MTLResourceOptions::StorageModeShared)
             .expect("buffer");
         raw.setLabel(Some(&NSString::from_str(label)));
         Self { raw, size, usage }
     }
 
-    pub fn with(device: &Device, label: &str, usage: u32, data: &[u8]) -> Self {
+    pub fn with(device: &ProtocolObject<dyn MTLDevice>, label: &str, usage: u32, data: &[u8]) -> Self {
         let bytes = NonNull::from(data).cast();
         let raw = unsafe {
-            device.device.newBufferWithBytes_length_options(bytes, data.len(), MTLResourceOptions::StorageModeShared)
+            device.newBufferWithBytes_length_options(bytes, data.len(), MTLResourceOptions::StorageModeShared)
         }
         .expect("buffer");
         raw.setLabel(Some(&NSString::from_str(label)));

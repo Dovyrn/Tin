@@ -47,11 +47,11 @@ impl Device {
     }
 
     pub fn buffer(&self, label: &str, usage: u32, size: u64) -> Buffer {
-        Buffer::new(self, label, usage, size)
+        Buffer::new(&self.device, label, usage, size)
     }
 
     pub fn buffer_with(&self, label: &str, usage: u32, data: &[u8]) -> Buffer {
-        Buffer::with(self, label, usage, data)
+        Buffer::with(&self.device, label, usage, data)
     }
 
     pub fn messages(&self) -> Vec<String> {

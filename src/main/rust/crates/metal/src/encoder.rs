@@ -2,7 +2,7 @@ use crate::buffer::Buffer;
 use crate::device::Device;
 use crate::fence::Fence;
 use crate::memory::Memory;
-use crate::pass::Pass;
+use crate::pass::{Color, Depth, Pass};
 use crate::queries::Queries;
 use crate::texture::Texture;
 use objc2::rc::Retained;
@@ -33,7 +33,7 @@ impl Encoder {
             queue: device.queue.clone(),
             cmd: None,
             submitted: VecDeque::new(),
-            memory: Memory::new(device),
+            memory: Memory::new(device.device.clone()),
             pass: None,
         }
     }
@@ -61,9 +61,9 @@ impl Encoder {
         }
     }
 
-    pub fn begin_pass(&mut self, label: &str, views: &[i64], clears: &[f32], area: [i32; 4]) -> &mut Pass {
+    pub fn begin_pass(&mut self, label: &str, colors: &[Color], depth: Option<Depth>, area: [i32; 4]) -> &mut Pass {
         let cmd = self.cmd().retain();
-        self.pass = Some(Pass::new(cmd, label, views, clears, area));
+        self.pass = Some(Pass::new(&cmd, label, colors, depth, area));
         self.pass.as_mut().unwrap()
     }
 

@@ -14,3 +14,4 @@ objc2-quartz-core = { workspace = true }
 block2 = { workspace = true }
 objc2-app-kit = { workspace = true }
 objc2-core-foundation = "0.3"
+hashbrown = "0.15"
