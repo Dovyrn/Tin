@@ -1,4 +1,4 @@
-use objc2_metal::MTLPixelFormat;
+use objc2_metal::{MTLPixelFormat, MTLVertexFormat};
 
 pub struct Format {
     pub raw: MTLPixelFormat,
@@ -56,5 +56,61 @@ pub fn format(ordinal: u32) -> Format {
         54 => f(MTLPixelFormat::Depth16Unorm, 2),
         55 => f(MTLPixelFormat::Stencil8, 1),
         _ => unreachable!("format {ordinal} has no metal form"),
+    }
+}
+
+pub fn vertex(ordinal: u32) -> MTLVertexFormat {
+    match ordinal {
+        0 => MTLVertexFormat::UCharNormalized,
+        1 => MTLVertexFormat::CharNormalized,
+        2 => MTLVertexFormat::UChar2Normalized,
+        3 => MTLVertexFormat::Char2Normalized,
+        4 => MTLVertexFormat::UChar3Normalized,
+        5 => MTLVertexFormat::Char3Normalized,
+        6 => MTLVertexFormat::UChar4Normalized,
+        7 => MTLVertexFormat::Char4Normalized,
+        8 => MTLVertexFormat::UShortNormalized,
+        9 => MTLVertexFormat::ShortNormalized,
+        10 => MTLVertexFormat::UShort2Normalized,
+        11 => MTLVertexFormat::Short2Normalized,
+        12 => MTLVertexFormat::UShort3Normalized,
+        13 => MTLVertexFormat::Short3Normalized,
+        14 => MTLVertexFormat::UShort4Normalized,
+        15 => MTLVertexFormat::Short4Normalized,
+        16 => MTLVertexFormat::UChar,
+        17 => MTLVertexFormat::Char,
+        18 => MTLVertexFormat::UChar2,
+        19 => MTLVertexFormat::Char2,
+        20 => MTLVertexFormat::UChar3,
+        21 => MTLVertexFormat::Char3,
+        22 => MTLVertexFormat::UChar4,
+        23 => MTLVertexFormat::Char4,
+        24 => MTLVertexFormat::UShort,
+        25 => MTLVertexFormat::Short,
+        26 => MTLVertexFormat::UShort2,
+        27 => MTLVertexFormat::Short2,
+        28 => MTLVertexFormat::UShort3,
+        29 => MTLVertexFormat::Short3,
+        30 => MTLVertexFormat::UShort4,
+        31 => MTLVertexFormat::Short4,
+        32 => MTLVertexFormat::UInt,
+        33 => MTLVertexFormat::Int,
+        34 => MTLVertexFormat::UInt2,
+        35 => MTLVertexFormat::Int2,
+        36 => MTLVertexFormat::UInt3,
+        37 => MTLVertexFormat::Int3,
+        38 => MTLVertexFormat::UInt4,
+        39 => MTLVertexFormat::Int4,
+        40 => MTLVertexFormat::Half,
+        41 => MTLVertexFormat::Half2,
+        42 => MTLVertexFormat::Half3,
+        43 => MTLVertexFormat::Half4,
+        44 => MTLVertexFormat::Float,
+        45 => MTLVertexFormat::Float2,
+        46 => MTLVertexFormat::Float3,
+        47 => MTLVertexFormat::Float4,
+        48 => MTLVertexFormat::UInt1010102Normalized,
+        50 => MTLVertexFormat::FloatRG11B10,
+        _ => unreachable!("format {ordinal} has no metal vertex form"),
     }
 }

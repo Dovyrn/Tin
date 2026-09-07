@@ -11,8 +11,8 @@ public class MTLFence implements GpuFence {
     private final long handle;
 
     @Override
-    public boolean awaitCompletion(long timeoutMs) {
-        return Native.nFenceAwait(handle, timeoutMs);
+    public boolean awaitCompletion(long timeoutNs) {
+        return Native.nFenceAwait(handle, timeoutNs);
     }
 
     @Override

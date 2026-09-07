@@ -68,7 +68,10 @@ impl Encoder {
     }
 
     pub fn end_pass(&mut self) {
-        self.pass.take().expect("no render pass").end();
+        let timestamps = self.pass.take().expect("no render pass").end();
+        for (queries, index) in timestamps {
+            unsafe { &*queries }.write(self.cmd(), index);
+        }
     }
 
     pub fn clear_color(&mut self, texture: &Texture, color: [f32; 4]) {

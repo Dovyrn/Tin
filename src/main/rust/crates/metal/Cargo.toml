@@ -15,3 +15,4 @@ block2 = { workspace = true }
 objc2-app-kit = { workspace = true }
 objc2-core-foundation = "0.3"
 hashbrown = "0.15"
+spirv-cross2 = { version = "0.7", default-features = false, features = ["msl"] }

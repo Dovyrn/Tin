@@ -7,6 +7,7 @@ use crate::view::View;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice};
+use std::cell::RefCell;
 use std::ptr::NonNull;
 
 const Z_ZERO_TO_ONE: i64 = 1;
@@ -21,13 +22,14 @@ pub struct Device {
     pub device: Retained<ProtocolObject<dyn MTLDevice>>,
     pub queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     pub debug: bool,
+    pub messages: RefCell<Vec<String>>,
 }
 
 impl Device {
     pub fn new(debug: bool) -> Self {
         let device = MTLCreateSystemDefaultDevice().expect("no metal device");
         let queue = device.newCommandQueue().expect("command queue");
-        Self { device, queue, debug }
+        Self { device, queue, debug, messages: RefCell::new(Vec::new()) }
     }
 
     pub fn sampler(
@@ -55,11 +57,14 @@ impl Device {
     }
 
     pub fn messages(&self) -> Vec<String> {
-        Vec::new()
+        self.messages.take()
     }
 
-    pub fn pipeline(&self, location: &str, vertex: &str, fragment: &str, defines: &str, state: &[i32]) -> Pipeline {
-        Pipeline::new(self, location, vertex, fragment, defines, state)
+    pub fn pipeline(
+        &self, location: &str, vertex: &[u8], fragment: &[u8], inputs: &[String], texels: &[(String, u32)],
+        state: &[i32],
+    ) -> Pipeline {
+        Pipeline::new(self, location, vertex, fragment, inputs, texels, state)
     }
 
     pub fn clear_pipelines(&self) {}
@@ -74,7 +79,7 @@ impl Device {
         unsafe {
             self.device.sampleTimestamps_gpuTimestamp(NonNull::from(&mut cpu), NonNull::from(&mut gpu));
         }
-        cpu
+        gpu
     }
 
     pub fn numbers(&self) -> [i64; 18] {

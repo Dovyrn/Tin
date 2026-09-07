@@ -8,8 +8,9 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLIndexType, MTLLoadAction, MTLRenderCommandEncoder,
-    MTLRenderPassDescriptor, MTLScissorRect, MTLStoreAction, MTLTexture, MTLViewport, MTLWinding,
+    MTLBuffer, MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLIndexType, MTLLoadAction,
+    MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLResourceOptions, MTLScissorRect, MTLStoreAction, MTLTexture,
+    MTLTextureDescriptor, MTLTextureUsage, MTLViewport, MTLWinding,
 };
 
 const INDIRECT_STRIDE: usize = 20;
@@ -56,12 +57,14 @@ pub struct Pass {
     raw: Retained<ProtocolObject<dyn MTLRenderCommandEncoder>>,
     width: u32,
     height: u32,
+    has_depth: bool,
     area: [i32; 4],
     pipeline: Option<*const Pipeline>,
     uniforms: HashMap<String, Uniform>,
     textures: HashMap<String, (*const View, *const Sampler)>,
     index: Option<(*const Buffer, Index)>,
     dirty: bool,
+    timestamps: Vec<(*const Queries, u32)>,
 }
 
 impl Pass {
@@ -119,19 +122,22 @@ impl Pass {
             raw,
             width: size.0,
             height: size.1,
+            has_depth: depth.is_some(),
             area,
             pipeline: None,
             uniforms: HashMap::new(),
             textures: HashMap::new(),
             index: None,
             dirty: true,
+            timestamps: Vec::new(),
         };
         pass.no_scissor();
         pass
     }
 
-    pub fn end(self) {
+    pub fn end(self) -> Vec<(*const Queries, u32)> {
         self.raw.endEncoding();
+        self.timestamps
     }
 
     pub fn push(&self, label: &str) {
@@ -143,7 +149,11 @@ impl Pass {
     }
 
     pub fn set_pipeline(&mut self, pipeline: &Pipeline) {
-        self.raw.setRenderPipelineState(&pipeline.raw);
+        let raw = match (self.has_depth, &pipeline.raw, &pipeline.no_depth) {
+            (true, Some(raw), _) | (false, _, Some(raw)) => raw,
+            _ => unreachable!("pipeline does not fit this pass"),
+        };
+        self.raw.setRenderPipelineState(raw);
         self.raw.setDepthStencilState(Some(&pipeline.depth));
         self.raw.setCullMode(pipeline.cull);
         self.raw.setDepthBias_slopeScale_clamp(pipeline.bias.1, pipeline.bias.0, 0.0);
@@ -214,10 +224,37 @@ impl Pass {
             }
         }
         for texture in &pipeline.textures {
+            let index = texture.index as usize;
+            if let Some(format) = &texture.texel {
+                let value =
+                    self.uniforms.get(&texture.name).unwrap_or_else(|| panic!("missing texel {}", texture.name));
+                let buffer = unsafe { &*value.buffer };
+                let width = (buffer.size - value.offset) as usize / format.pixel as usize;
+                let info = unsafe {
+                    MTLTextureDescriptor::textureBufferDescriptorWithPixelFormat_width_resourceOptions_usage(
+                        format.raw,
+                        width,
+                        MTLResourceOptions::StorageModeShared,
+                        MTLTextureUsage::ShaderRead,
+                    )
+                };
+                let view = buffer
+                    .raw
+                    .newTextureWithDescriptor_offset_bytesPerRow(
+                        &info,
+                        value.offset as usize,
+                        width * format.pixel as usize,
+                    )
+                    .expect("texel view");
+                unsafe {
+                    self.raw.setVertexTexture_atIndex(Some(&view), index);
+                    self.raw.setFragmentTexture_atIndex(Some(&view), index);
+                }
+                continue;
+            }
             let (view, sampler) =
                 self.textures.get(&texture.name).unwrap_or_else(|| panic!("missing sampler {}", texture.name));
             let (view, sampler) = unsafe { (&**view, &**sampler) };
-            let index = texture.index as usize;
             unsafe {
                 self.raw.setVertexTexture_atIndex(Some(&view.raw), index);
                 self.raw.setVertexSamplerState_atIndex(Some(&sampler.raw), index);
@@ -331,7 +368,7 @@ impl Pass {
         self.draw_indexed(count, 1, first, base, 0);
     }
 
-    pub fn timestamp(&self, queries: &Queries, index: u32) {
-        queries.write_in_pass(&self.raw, index);
+    pub fn timestamp(&mut self, queries: &Queries, index: u32) {
+        self.timestamps.push((queries, index));
     }
 }

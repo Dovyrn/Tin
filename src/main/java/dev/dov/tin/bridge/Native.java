@@ -30,8 +30,8 @@ public class Native {
 
     public native boolean nDeviceDebugging(long device);
 
-    public native long nDevicePipeline(long device, String location, String vertex, String fragment, String defines,
-            int[] state);
+    public native long nDevicePipeline(long device, String location, long vertex, int vertexSize, long fragment,
+            int fragmentSize, String[] inputs, String[] texels, int[] formats, int[] state);
 
     public native void nDeviceClearPipelines(long device);
 
@@ -90,7 +90,7 @@ public class Native {
 
     public native void nEncoderTimestamp(long encoder, long queries, int index);
 
-    public native boolean nFenceAwait(long fence, long timeoutMs);
+    public native boolean nFenceAwait(long fence, long timeoutNs);
 
     public native void nFenceClose(long fence);
 

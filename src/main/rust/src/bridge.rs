@@ -7,6 +7,7 @@ use jni::{jni_sig, jni_str, Env, EnvUnowned, JavaVM};
 use metal::buffer::Buffer;
 use metal::device::Device;
 use metal::encoder::Encoder;
+use metal::fence::Fence;
 use metal::memory::{Memory, Slice};
 use metal::pass::{Color, Depth, Index, Pass};
 use metal::pipeline::Pipeline;
@@ -27,6 +28,10 @@ fn device<'a>(handle: jlong) -> &'a Device {
 
 fn buffer<'a>(handle: jlong) -> &'a Buffer {
     unsafe { &*(handle as *const Buffer) }
+}
+
+fn fence<'a>(handle: jlong) -> &'a Fence {
+    unsafe { &*(handle as *const Fence) }
 }
 
 fn queries<'a>(handle: jlong) -> &'a Queries {
@@ -155,6 +160,15 @@ fn strings<'l>(env: &mut Env<'l>, items: &[String]) -> Result<JObjectArray<'l, J
     Ok(out)
 }
 
+fn texts(env: &mut Env, a: &JObjectArray<JString>) -> Result<Vec<String>, Error> {
+    let mut out = Vec::with_capacity(a.len(env)?);
+    for i in 0..a.len(env)? {
+        let item = a.get_element(env, i)?;
+        out.push(text(env, &item)?);
+    }
+    Ok(out)
+}
+
 fn encoder<'a>(handle: jlong) -> &'a mut Encoder {
     unsafe { &mut *(handle as *mut Encoder) }
 }
@@ -258,15 +272,20 @@ entries! {
     }
 
     nDevicePipeline(mut env, _class,
-        handle: jlong, location: JString<'l>, vertex: JString<'l>, fragment: JString<'l>, defines: JString<'l>, state: JIntArray<'l>,
+        handle: jlong, location: JString<'l>, vertex: jlong, vertex_size: jint, fragment: jlong, fragment_size: jint,
+        inputs: JObjectArray<'l, JString<'l>>, texels: JObjectArray<'l, JString<'l>>, formats: JIntArray<'l>,
+        state: JIntArray<'l>,
     ) -> jlong {
         env.with_env(|env| {
             let location = text(env, &location)?;
-            let vertex = text(env, &vertex)?;
-            let fragment = text(env, &fragment)?;
-            let defines = text(env, &defines)?;
+            let vertex = bytes(vertex, vertex_size);
+            let fragment = bytes(fragment, fragment_size);
+            let inputs = texts(env, &inputs)?;
+            let texels = texts(env, &texels)?;
+            let formats = ints(env, &formats)?;
+            let texels: Vec<(String, u32)> = texels.into_iter().zip(formats).map(|(n, f)| (n, f as u32)).collect();
             let state = ints(env, &state)?;
-            let pipeline = device(handle).pipeline(&location, &vertex, &fragment, &defines, &state);
+            let pipeline = device(handle).pipeline(&location, vertex, fragment, &inputs, &texels, &state);
             Ok::<_, Error>(boxed(pipeline))
         })
         .resolve::<ThrowRuntimeExAndDefault>()
@@ -302,8 +321,8 @@ entries! {
         env.with_env(|env| strings(env, &device(handle).strings())).resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nPipelineValid(_env, _class, pipeline: jlong) -> jboolean {
-        todo!()
+    nPipelineValid(_env, _class, handle: jlong) -> jboolean {
+        pipeline(handle).valid()
     }
 
     nEncoderSubmit(_env, _class, handle: jlong) {
@@ -462,12 +481,12 @@ entries! {
         encoder(handle).timestamp(queries(pool), index as u32);
     }
 
-    nFenceAwait(_env, _class, fence: jlong, timeout_ms: jlong) -> jboolean {
-        todo!()
+    nFenceAwait(_env, _class, handle: jlong, timeout_ns: jlong) -> jboolean {
+        fence(handle).wait(timeout_ns as u64)
     }
 
-    nFenceClose(_env, _class, fence: jlong) {
-        todo!()
+    nFenceClose(_env, _class, handle: jlong) {
+        drop(unsafe { Box::from_raw(handle as *mut Fence) });
     }
 
     nPassPush(mut env, _class, handle: jlong, label: JString<'l>) {
@@ -723,12 +742,22 @@ entries! {
         drop(unsafe { Box::from_raw(handle as *mut Sampler) });
     }
 
-    nQueriesValues(_env, _class, queries: jlong, index: jint, count: jint) -> JLongArray<'l> {
-        todo!()
+    nQueriesValues(mut env, _class, handle: jlong, first: jint, count: jint) -> JLongArray<'l> {
+        let values = queries(handle).values(first as u32, count as u32);
+        let mut out = Vec::with_capacity(values.len() * 2);
+        for value in values {
+            out.extend([value.is_some() as jlong, value.unwrap_or(0) as jlong]);
+        }
+        env.with_env(|env| {
+            let array = env.new_long_array(out.len())?;
+            array.set_region(env, 0, &out)?;
+            Ok::<_, Error>(array)
+        })
+        .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    nQueriesClose(_env, _class, queries: jlong) {
-        todo!()
+    nQueriesClose(_env, _class, handle: jlong) {
+        drop(unsafe { Box::from_raw(handle as *mut Queries) });
     }
 
 }

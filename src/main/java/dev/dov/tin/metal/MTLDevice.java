@@ -4,10 +4,13 @@ import dev.dov.tin.bridge.Native;
 import org.lwjgl.glfw.GLFWNativeCocoa;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.buffers.GpuBuffer;
+import com.mojang.blaze3d.pipeline.BindGroupLayout;
 import com.mojang.blaze3d.pipeline.CompiledRenderPipeline;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
+import com.mojang.blaze3d.preprocessor.GlslPreprocessor;
 import com.mojang.blaze3d.shaders.ShaderSource;
 import com.mojang.blaze3d.shaders.ShaderType;
+import com.mojang.blaze3d.shaders.UniformType;
 import com.mojang.blaze3d.systems.CommandEncoderBackend;
 import com.mojang.blaze3d.systems.DeviceFeatures;
 import com.mojang.blaze3d.systems.DeviceInfo;
@@ -22,6 +25,10 @@ import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.textures.GpuSampler;
 import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.GpuTextureView;
+import com.mojang.blaze3d.vulkan.glsl.GlslCompiler;
+import com.mojang.blaze3d.vulkan.glsl.IntermediaryShaderModule;
+import com.mojang.blaze3d.vulkan.glsl.ShaderCompileException;
+import com.mojang.logging.LogUtils;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -31,13 +38,18 @@ import java.util.OptionalDouble;
 import java.util.function.Supplier;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import net.minecraft.client.renderer.ShaderDefines;
+import net.minecraft.resources.Identifier;
 import org.lwjgl.system.MemoryUtil;
+import org.slf4j.Logger;
 
 @RequiredArgsConstructor
 public class MTLDevice implements GpuDeviceBackend {
+    private static final Logger LOGGER = LogUtils.getLogger();
     @Getter
     private final long handle;
     private final ShaderSource shaders;
+    private final GlslCompiler compiler = new GlslCompiler();
 
     @Override
     public GpuSurfaceBackend createSurface(long window) {
@@ -110,21 +122,65 @@ public class MTLDevice implements GpuDeviceBackend {
     @Override
     public CompiledRenderPipeline precompilePipeline(RenderPipeline pipeline, ShaderSource custom) {
         var source = custom == null ? shaders : custom;
-        var vertex = source.get(pipeline.getVertexShader(), ShaderType.VERTEX);
-        var fragment = source.get(pipeline.getFragmentShader(), ShaderType.FRAGMENT);
-        var defines = pipeline.getShaderDefines().asSourceDirectives();
-        long compiled = Native.nDevicePipeline(handle, pipeline.getLocation().toString(), vertex, fragment,
-                defines, state(pipeline));
-        return new MTLPipeline(compiled);
+        var defines = pipeline.getShaderDefines();
+        var inputs = new ArrayList<String>();
+        for (var format : pipeline.getVertexFormatBindings()) {
+            if (format != null) {
+                for (var element : format.getElements()) {
+                    inputs.add(element.name());
+                }
+            }
+        }
+        var texels = new ArrayList<String>();
+        var formats = new ArrayList<Integer>();
+        for (var uniform : BindGroupLayout.flattenUniforms(pipeline.getBindGroupLayouts())) {
+            if (uniform.type() == UniformType.TEXEL_BUFFER) {
+                texels.add(uniform.name());
+                formats.add(uniform.gpuFormat().ordinal());
+            }
+        }
+        try (var vertex = spirv(pipeline.getVertexShader(), ShaderType.VERTEX, defines, source);
+                var fragment = spirv(pipeline.getFragmentShader(), ShaderType.FRAGMENT, defines, source)) {
+            long compiled = Native.nDevicePipeline(handle, pipeline.getLocation().toString(), address(vertex),
+                    size(vertex), address(fragment), size(fragment), inputs.toArray(String[]::new),
+                    texels.toArray(String[]::new), formats.stream().mapToInt(Integer::intValue).toArray(),
+                    state(pipeline));
+            return new MTLPipeline(compiled);
+        }
+    }
+
+    private IntermediaryShaderModule spirv(Identifier id, ShaderType type, ShaderDefines defines,
+            ShaderSource source) {
+        var text = source.get(id, type);
+        if (text == null) {
+            LOGGER.error("Couldn't find source for {} shader ({})", type, id);
+            return IntermediaryShaderModule.INVALID;
+        }
+        try {
+            return compiler.createIntermediary(id.toDebugFileName(), GlslPreprocessor.injectDefines(text, defines),
+                    type);
+        } catch (ShaderCompileException e) {
+            LOGGER.error("Couldn't compile {} shader {}: {}", type, id, e.getMessage());
+            return IntermediaryShaderModule.INVALID;
+        }
+    }
+
+    private static long address(IntermediaryShaderModule module) {
+        return module.spirv() == null ? 0 : MemoryUtil.memAddress(module.spirv());
+    }
+
+    private static int size(IntermediaryShaderModule module) {
+        return module.spirv() == null ? 0 : module.spirv().remaining();
     }
 
     private int[] state(RenderPipeline pipeline) {
         var out = new ArrayList<Integer>();
         var depth = pipeline.getDepthStencilState();
-        out.add(depth.depthTest().ordinal());
-        out.add(depth.writeDepth() ? 1 : 0);
-        out.add(Float.floatToIntBits(depth.depthBiasScaleFactor()));
-        out.add(Float.floatToIntBits(depth.depthBiasConstant()));
+        out.add(depth == null ? 0 : 1);
+        out.add(depth == null ? 0 : depth.depthTest().ordinal());
+        out.add(depth != null && depth.writeDepth() ? 1 : 0);
+        out.add(depth == null ? 0 : Float.floatToIntBits(depth.depthBiasScaleFactor()));
+        out.add(depth == null ? 0 : Float.floatToIntBits(depth.depthBiasConstant()));
         out.add(pipeline.getPolygonMode().ordinal());
         out.add(pipeline.isCull() ? 1 : 0);
         out.add(pipeline.getPrimitiveTopology().ordinal());
@@ -147,6 +203,10 @@ public class MTLDevice implements GpuDeviceBackend {
         var formats = pipeline.getVertexFormatBindings();
         out.add(formats.length);
         for (var format : formats) {
+            out.add(format == null ? 0 : 1);
+            if (format == null) {
+                continue;
+            }
             out.add(format.getStepRate());
             out.add(format.getVertexSize());
             var elements = format.getElements();
@@ -166,6 +226,7 @@ public class MTLDevice implements GpuDeviceBackend {
 
     @Override
     public void close() {
+        compiler.close();
         Native.nDeviceClose(handle);
     }
 
