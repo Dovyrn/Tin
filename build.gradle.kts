@@ -10,6 +10,7 @@ val minecraftVersion: String by project
 val loaderVersion: String by project
 val fabricVersion: String by project
 val lombokVersion: String by project
+val metaljVersion: String by project
 
 version = modVersion
 group = mavenGroup
@@ -26,6 +27,7 @@ loom {
 
 repositories {
     mavenCentral()
+    maven("https://jitpack.io")
 }
 
 dependencies {
@@ -33,52 +35,13 @@ dependencies {
     implementation("net.fabricmc:fabric-loader:$loaderVersion")
     implementation("net.fabricmc.fabric-api:fabric-api:$fabricVersion")
 
+    implementation("com.github.Dovyrn:MetalJ:$metaljVersion")
+
     compileOnly("org.projectlombok:lombok:$lombokVersion")
     annotationProcessor("org.projectlombok:lombok:$lombokVersion")
 }
 
-val nativeSrcDir = file("src/main/rust")
-val nativeOutDir = layout.buildDirectory.dir("generated/native")
-
-val archName = System.getProperty("os.arch").lowercase()
-val hostArch = if (archName in listOf("aarch64", "arm64")) "aarch64" else "x86_64"
-val hostTarget = "$hostArch-apple-darwin"
-
-val nativeTargets = when {
-    !project.hasProperty("targets") -> listOf(hostTarget)
-    project.property("targets") == "all" -> listOf("aarch64-apple-darwin", "x86_64-apple-darwin")
-    else -> project.property("targets").toString().split(",").map { it.trim() }
-}
-
-fun nativeArtifact(triple: String) = File(nativeSrcDir, "target/$triple/release/libtin_native.dylib")
-
-nativeTargets.forEach { triple ->
-    tasks.register<Exec>("buildNative-$triple") {
-        workingDir = nativeSrcDir
-        commandLine("cargo", "build", "--release", "--target", triple)
-        inputs.dir(File(nativeSrcDir, "src"))
-        inputs.dir(File(nativeSrcDir, "crates"))
-        inputs.files(File(nativeSrcDir, "Cargo.toml"), File(nativeSrcDir, "Cargo.lock"))
-        outputs.file(nativeArtifact(triple))
-    }
-}
-
-tasks.register<Sync>("stageNative") {
-    dependsOn(nativeTargets.map { "buildNative-$it" })
-    into(nativeOutDir.map { File(it.asFile, "natives") })
-    nativeTargets.forEach { triple ->
-        from(nativeArtifact(triple)) {
-            into("macos/${triple.substringBefore("-")}")
-        }
-    }
-}
-
-sourceSets.main {
-    resources.srcDir(nativeOutDir)
-}
-
 tasks.processResources {
-    dependsOn("stageNative")
     inputs.property("version", project.version)
     inputs.property("minecraft_version", minecraftVersion)
     inputs.property("loader_version", loaderVersion)
@@ -99,10 +62,6 @@ tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     options.compilerArgs.add("-Xlint:deprecation")
     options.release = targetJavaVersion
-}
-
-tasks.matching { it.name == "sourcesJar" }.configureEach {
-    dependsOn("stageNative")
 }
 
 java {
