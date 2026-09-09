@@ -9,7 +9,11 @@ import org.jetbrains.annotations.NotNull;
 import java.util.Collection;
 import java.util.List;
 
+@lombok.RequiredArgsConstructor
 public class MetalGpuSurface implements GpuSurfaceBackend {
+    private final MetalDevice device;
+    private final long window;
+
     @Override
     public void configure(GpuSurface.@NotNull Configuration config) {
     }

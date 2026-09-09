@@ -7,6 +7,7 @@ import org.jetbrains.annotations.NotNull;
 
 @RequiredArgsConstructor
 public class MetalQueryPool implements GpuQueryPool {
+    private final MetalDevice device;
     private final int size;
 
     @Override

@@ -14,7 +14,10 @@ import java.nio.ByteBuffer;
 import org.jetbrains.annotations.NotNull;
 import org.joml.Vector4fc;
 
+@lombok.RequiredArgsConstructor
 public class MetalCommandEncoder implements CommandEncoderBackend {
+    private final MetalDevice device;
+
     private final MetalTransientMemory memory = new MetalTransientMemory();
 
     @Override

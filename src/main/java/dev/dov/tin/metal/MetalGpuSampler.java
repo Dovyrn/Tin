@@ -3,12 +3,15 @@ package dev.dov.tin.metal;
 import com.mojang.blaze3d.textures.AddressMode;
 import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.textures.GpuSampler;
+import dev.dov.metalj.resources.samplers.MTLSamplerState;
 import java.util.OptionalDouble;
+import lombok.Getter;
 import lombok.RequiredArgsConstructor;
-import org.jetbrains.annotations.NotNull;
 
 @RequiredArgsConstructor
 public class MetalGpuSampler extends GpuSampler {
+    @Getter
+    private final MTLSamplerState sampler;
     private final AddressMode addressModeU;
     private final AddressMode addressModeV;
     private final FilterMode minFilter;
@@ -17,22 +20,22 @@ public class MetalGpuSampler extends GpuSampler {
     private final OptionalDouble maxLod;
 
     @Override
-    public @NotNull AddressMode getAddressModeU() {
+    public AddressMode getAddressModeU() {
         return addressModeU;
     }
 
     @Override
-    public @NotNull AddressMode getAddressModeV() {
+    public AddressMode getAddressModeV() {
         return addressModeV;
     }
 
     @Override
-    public @NotNull FilterMode getMinFilter() {
+    public FilterMode getMinFilter() {
         return minFilter;
     }
 
     @Override
-    public @NotNull FilterMode getMagFilter() {
+    public FilterMode getMagFilter() {
         return magFilter;
     }
 
@@ -42,11 +45,12 @@ public class MetalGpuSampler extends GpuSampler {
     }
 
     @Override
-    public @NotNull OptionalDouble getMaxLod() {
+    public OptionalDouble getMaxLod() {
         return maxLod;
     }
 
     @Override
     public void close() {
+        sampler.release();
     }
 }
