@@ -20,6 +20,7 @@ import org.jspecify.annotations.Nullable;
 
 public class MetalRenderPipeline implements CompiledRenderPipeline {
     private final RenderPipeline pipeline;
+    private final Translation translation;
     private final MTLDepthStencilState depthState;
     private final long topology;
     private final long cull;
@@ -29,8 +30,9 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
     private final @Nullable MTLRenderPipelineState stateNoDepth;
 
     public MetalRenderPipeline(MetalDevice device, RenderPipeline pipeline, MTLFunction vertex,
-            MTLFunction fragment) {
+            MTLFunction fragment, Translation translation) {
         this.pipeline = pipeline;
+        this.translation = translation;
         var depth = pipeline.getDepthStencilState();
         var depthDescriptor = MTLDepthStencilDescriptor.new_();
         depthDescriptor.setDepthCompareFunction(depth == null
@@ -44,6 +46,11 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
         cull = pipeline.isCull()
                 ? MTLRenderCommandEncoder.MTLCullModeBack
                 : MTLRenderCommandEncoder.MTLCullModeNone;
+        if (vertex == null) {
+            state = null;
+            stateNoDepth = null;
+            return;
+        }
         var descriptor = MTLRenderPipelineDescriptor.new_();
         descriptor.setLabel(NSString.stringWithUTF8String(pipeline.getLocation().toString()));
         descriptor.setVertexFunction(vertex);
@@ -130,5 +137,26 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
 
     public void bindResources(MTLRenderCommandEncoder pass, Map<String, GpuBufferSlice> uniforms,
             Map<String, GpuTextureView> views, Map<String, GpuSampler> samplers) {
+        for (var binding : translation.uniforms()) {
+            var value = uniforms.get(binding.name());
+            if (value == null) {
+                throw new IllegalStateException("missing uniform " + binding.name());
+            }
+            var buffer = ((MetalGpuBuffer) value.buffer()).getBuffer();
+            pass.setVertexBuffer(buffer, value.offset(), binding.index());
+            pass.setFragmentBuffer(buffer, value.offset(), binding.index());
+        }
+        for (var binding : translation.textures()) {
+            var view = views.get(binding.name());
+            if (view == null) {
+                throw new IllegalStateException("missing texture " + binding.name());
+            }
+            var texture = ((MetalGpuTextureView) view).getView();
+            var sampler = ((MetalGpuSampler) samplers.get(binding.name())).getSampler();
+            pass.setVertexTexture(texture, binding.index());
+            pass.setVertexSamplerState(sampler, binding.index());
+            pass.setFragmentTexture(texture, binding.index());
+            pass.setFragmentSamplerState(sampler, binding.index());
+        }
     }
 }

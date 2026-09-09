@@ -111,7 +111,7 @@ public class MetalRenderPass implements RenderPassBackend {
 
     @Override
     public void setPipeline(RenderPipeline pipeline) {
-        this.pipeline = (MetalRenderPipeline) encoder.getDevice().compiled(pipeline);
+        this.pipeline = encoder.getDevice().compiled(pipeline);
         this.pipeline.bind(pass, depth);
         dirty = true;
     }

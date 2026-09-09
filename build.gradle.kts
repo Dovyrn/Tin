@@ -41,7 +41,33 @@ dependencies {
     annotationProcessor("org.projectlombok:lombok:$lombokVersion")
 }
 
+val nativeSrcDir = file("src/main/rust")
+val nativeOutDir = layout.buildDirectory.dir("generated/native")
+
+tasks.register<Exec>("buildNative") {
+    workingDir = nativeSrcDir
+    commandLine("cargo", "build", "--release")
+    inputs.dir(File(nativeSrcDir, "src"))
+    inputs.files(File(nativeSrcDir, "Cargo.toml"))
+    outputs.file(File(nativeSrcDir, "target/release/libtin_shaders.dylib"))
+}
+
+tasks.register<Sync>("stageNative") {
+    dependsOn("buildNative")
+    into(nativeOutDir.map { File(it.asFile, "natives") })
+    from(File(nativeSrcDir, "target/release/libtin_shaders.dylib"))
+}
+
+sourceSets.main {
+    resources.srcDir(nativeOutDir)
+}
+
+tasks.matching { it.name == "sourcesJar" }.configureEach {
+    dependsOn("stageNative")
+}
+
 tasks.processResources {
+    dependsOn("stageNative")
     inputs.property("version", project.version)
     inputs.property("minecraft_version", minecraftVersion)
     inputs.property("loader_version", loaderVersion)

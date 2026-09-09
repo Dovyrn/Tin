@@ -8,7 +8,10 @@ import com.mojang.blaze3d.shaders.GpuDebugOptions;
 import com.mojang.blaze3d.preprocessor.GlslPreprocessor;
 import com.mojang.blaze3d.shaders.ShaderSource;
 import com.mojang.blaze3d.shaders.ShaderType;
+import com.mojang.blaze3d.pipeline.BindGroupLayout;
+import com.mojang.blaze3d.shaders.UniformType;
 import com.mojang.blaze3d.vulkan.glsl.GlslCompiler;
+import com.mojang.blaze3d.vulkan.glsl.IntermediaryShaderModule;
 import com.mojang.blaze3d.systems.CommandEncoderBackend;
 import com.mojang.blaze3d.systems.DeviceFeatures;
 import com.mojang.blaze3d.systems.DeviceInfo;
@@ -28,6 +31,7 @@ import dev.dov.metalj.device.Metal;
 import dev.dov.metalj.objc.NSString;
 import dev.dov.metalj.objc.ObjC;
 import dev.dov.metalj.pipelines.shaders.MTLCompileOptions;
+import dev.dov.metalj.pipelines.shaders.MTLLanguageVersion;
 import dev.dov.metalj.pipelines.shaders.MTLFunction;
 import dev.dov.metalj.resources.MTLResourceOptions;
 import dev.dov.metalj.resources.MTLStorageMode;
@@ -37,6 +41,7 @@ import dev.dov.metalj.resources.textures.MTLTextureDescriptor;
 import dev.dov.metalj.resources.textures.MTLTextureUsage;
 import java.lang.foreign.Arena;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +49,7 @@ import java.util.OptionalDouble;
 import java.util.Set;
 import java.util.function.Supplier;
 import lombok.Getter;
+import lombok.SneakyThrows;
 import org.jspecify.annotations.Nullable;
 import org.lwjgl.system.MemoryUtil;
 
@@ -61,6 +67,7 @@ public class MetalDevice implements GpuDeviceBackend {
     private final MTLCommandQueue queue = device.newCommandQueue();
     private final Map<RenderPipeline, MetalRenderPipeline> pipelines = new IdentityHashMap<>();
     private final GlslCompiler compiler = new GlslCompiler();
+    private final List<String> messages = new ArrayList<>();
     private final long window;
     private final ShaderSource shaders;
     private final GpuDebugOptions debug;
@@ -158,7 +165,9 @@ public class MetalDevice implements GpuDeviceBackend {
 
     @Override
     public List<String> getLastDebugMessages() {
-        return List.of();
+        var out = List.copyOf(messages);
+        messages.clear();
+        return out;
     }
 
     @Override
@@ -171,26 +180,55 @@ public class MetalDevice implements GpuDeviceBackend {
         return pipelines.computeIfAbsent(pipeline, key -> compile(key, shaderSource == null ? shaders : shaderSource));
     }
 
-    private MetalRenderPipeline compile(RenderPipeline pipeline, ShaderSource source) {
-        var vertex = function(pipeline, ShaderType.VERTEX, source);
-        var fragment = function(pipeline, ShaderType.FRAGMENT, source);
-        return new MetalRenderPipeline(this, pipeline, vertex, fragment);
+    public MetalRenderPipeline compiled(RenderPipeline pipeline) {
+        return (MetalRenderPipeline) precompilePipeline(pipeline, null);
     }
 
-    @lombok.SneakyThrows
-    private MTLFunction function(RenderPipeline pipeline, ShaderType stage, ShaderSource source) {
+    private MetalRenderPipeline compile(RenderPipeline pipeline, ShaderSource source) {
+        var inputs = new ArrayList<String>();
+        for (var format : pipeline.getVertexFormatBindings()) {
+            if (format != null) {
+                for (var element : format.getElements()) {
+                    inputs.add(element.name());
+                }
+            }
+        }
+        var texels = new ArrayList<Texel>();
+        for (var uniform : BindGroupLayout.flattenUniforms(pipeline.getBindGroupLayouts())) {
+            if (uniform.type() == UniformType.TEXEL_BUFFER) {
+                texels.add(new Texel(uniform.name(), true));
+            }
+        }
+        try (var vertex = spirv(pipeline, ShaderType.VERTEX, source);
+                var fragment = spirv(pipeline, ShaderType.FRAGMENT, source)) {
+            var translation = MetalShaders.translate(vertex.spirv(), fragment.spirv(),
+                    new Request(inputs, texels));
+            if (translation.error() != null) {
+                messages.add("Couldn't compile pipeline " + pipeline.getLocation() + ": " + translation.error());
+                return new MetalRenderPipeline(this, pipeline, null, null, translation);
+            }
+            return new MetalRenderPipeline(this, pipeline, function(translation.vertex(), translation.vertexEntry()),
+                    function(translation.fragment(), translation.fragmentEntry()), translation);
+        }
+    }
+
+    @SneakyThrows
+    private IntermediaryShaderModule spirv(RenderPipeline pipeline, ShaderType stage, ShaderSource source) {
         var id = stage == ShaderType.VERTEX ? pipeline.getVertexShader() : pipeline.getFragmentShader();
         var text = source.get(id, stage);
-        var spirv = compiler.createIntermediary(id.toDebugFileName(),
+        return compiler.createIntermediary(id.toDebugFileName(),
                 GlslPreprocessor.injectDefines(text, pipeline.getShaderDefines()), stage);
-        var library = device.newLibraryWithSource(
-                NSString.stringWithUTF8String(MetalShaders.translate(spirv.spirv(), stage)),
-                MTLCompileOptions.new_());
-        return library.newFunctionWithName(NSString.stringWithUTF8String(MetalShaders.entryPoint(stage)));
     }
 
-    public CompiledRenderPipeline compiled(RenderPipeline pipeline) {
-        return precompilePipeline(pipeline, null);
+    private MTLFunction function(String source, String entry) {
+        var library = device.newLibraryWithSource(NSString.stringWithUTF8String(source), options());
+        return library.newFunctionWithName(NSString.stringWithUTF8String(entry));
+    }
+
+    private static MTLCompileOptions options() {
+        var options = MTLCompileOptions.new_();
+        options.setLanguageVersion(MTLLanguageVersion.MTLLanguageVersion3_0);
+        return options;
     }
 
     @Override
