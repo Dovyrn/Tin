@@ -36,6 +36,7 @@ dependencies {
     implementation("net.fabricmc.fabric-api:fabric-api:$fabricVersion")
 
     implementation("com.github.Dovyrn:MetalJ:$metaljVersion")
+    include("com.github.Dovyrn:MetalJ:$metaljVersion")
 
     compileOnly("org.projectlombok:lombok:$lombokVersion")
     annotationProcessor("org.projectlombok:lombok:$lombokVersion")
