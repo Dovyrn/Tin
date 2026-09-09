@@ -13,7 +13,6 @@ import org.lwjgl.system.MemoryUtil;
 @RequiredArgsConstructor
 public class MetalTransientMemory implements TransientMemory {
     private static final long BLOCK = 512 * 1024;
-    private static final int IN_FLIGHT = 2;
     private static final int CPU_ALIGN = 16;
 
     private final MetalDevice device;
@@ -192,7 +191,7 @@ public class MetalTransientMemory implements TransientMemory {
         cpuRetired.addLast(List.copyOf(cpu));
         cpu.clear();
         cpuOffset = BLOCK;
-        while (cpuRetired.size() > IN_FLIGHT) {
+        while (cpuRetired.size() > MetalCommandEncoder.IN_FLIGHT) {
             for (var block : cpuRetired.removeFirst()) {
                 MemoryUtil.memFree(block);
             }
@@ -200,8 +199,14 @@ public class MetalTransientMemory implements TransientMemory {
         retired.addLast(List.copyOf(used));
         used.clear();
         offset = BLOCK;
-        while (retired.size() > IN_FLIGHT) {
-            free.addAll(retired.removeFirst());
+        while (retired.size() > MetalCommandEncoder.IN_FLIGHT) {
+            for (var block : retired.removeFirst()) {
+                if (block.size() > BLOCK) {
+                    block.getBuffer().release();
+                } else {
+                    free.add(block);
+                }
+            }
         }
     }
 }

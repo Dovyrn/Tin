@@ -5,7 +5,6 @@ import com.mojang.blaze3d.systems.GpuSurface;
 import com.mojang.blaze3d.systems.GpuSurfaceBackend;
 import com.mojang.blaze3d.systems.SurfaceException;
 import com.mojang.blaze3d.textures.GpuTextureView;
-import dev.dov.metalj.commands.passes.MTLClearColor;
 import dev.dov.metalj.commands.passes.MTLLoadAction;
 import dev.dov.metalj.commands.passes.MTLRenderPassDescriptor;
 import dev.dov.metalj.commands.passes.MTLStoreAction;
@@ -24,10 +23,8 @@ import dev.dov.metalj.resources.samplers.MTLSamplerMinMagFilter;
 import dev.dov.metalj.resources.samplers.MTLSamplerState;
 import dev.dov.metalj.resources.textures.MTLPixelFormat;
 import java.lang.foreign.Arena;
-import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.List;
-import lombok.SneakyThrows;
 import org.lwjgl.glfw.GLFWNativeCocoa;
 
 public class MetalGpuSurface implements GpuSurfaceBackend {
@@ -44,42 +41,50 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
     public MetalGpuSurface(MetalDevice device, long window) {
         this.device = device;
         cocoa = NSWindow.of(GLFWNativeCocoa.glfwGetCocoaWindow(window));
-        layer = CAMetalLayer.layer();
-        layer.setDevice(device.getDevice());
-        layer.setPixelFormat(MTLPixelFormat.MTLPixelFormatBGRA8Unorm);
-        layer.setFramebufferOnly(false);
-        layer.setContentsScale(cocoa.backingScaleFactor());
-        var view = cocoa.contentView();
-        view.setWantsLayer(true);
-        view.setLayer(layer);
-        blit = blitPipeline();
+        layer = AutoreleasePool.get(() -> {
+            var created = CAMetalLayer.layer();
+            created.retain();
+            created.setDevice(device.getDevice());
+            created.setPixelFormat(MTLPixelFormat.MTLPixelFormatBGRA8Unorm);
+            created.setFramebufferOnly(true);
+            created.setContentsScale(cocoa.backingScaleFactor());
+            var view = cocoa.contentView();
+            view.setWantsLayer(true);
+            view.setLayer(created);
+            return created;
+        });
+        blit = AutoreleasePool.get(this::blitPipeline);
         sampler = blitSampler();
     }
 
     private MTLRenderPipelineState blitPipeline() {
-        var library = device.getDevice().newLibraryWithSource(NSString.stringWithUTF8String(shader()),
-                MTLCompileOptions.new_());
+        var options = MTLCompileOptions.new_();
+        var library = device.getDevice().newLibraryWithSource(
+                NSString.stringWithUTF8String(MetalShaders.source("/tin/blit.metal")), options);
+        options.release();
+        var vertex = library.newFunctionWithName(NSString.stringWithUTF8String("blit_vertex"));
+        var fragment = library.newFunctionWithName(NSString.stringWithUTF8String("blit_fragment"));
+        library.release();
         var descriptor = MTLRenderPipelineDescriptor.new_();
-        descriptor.setVertexFunction(library.newFunctionWithName(NSString.stringWithUTF8String("blit_vertex")));
-        descriptor.setFragmentFunction(library.newFunctionWithName(NSString.stringWithUTF8String("blit_fragment")));
+        descriptor.setVertexFunction(vertex);
+        descriptor.setFragmentFunction(fragment);
         descriptor.colorAttachments()
                 .objectAtIndexedSubscript(0)
                 .setPixelFormat(MTLPixelFormat.MTLPixelFormatBGRA8Unorm);
-        return device.getDevice().newRenderPipelineStateWithDescriptor(descriptor);
+        var state = device.getDevice().newRenderPipelineStateWithDescriptor(descriptor);
+        descriptor.release();
+        vertex.release();
+        fragment.release();
+        return state;
     }
 
     private MTLSamplerState blitSampler() {
         var descriptor = MTLSamplerDescriptor.new_();
         descriptor.setMinFilter(MTLSamplerMinMagFilter.MTLSamplerMinMagFilterNearest);
         descriptor.setMagFilter(MTLSamplerMinMagFilter.MTLSamplerMinMagFilterNearest);
-        return device.getDevice().newSamplerStateWithDescriptor(descriptor);
-    }
-
-    @SneakyThrows
-    private static String shader() {
-        try (var source = MetalGpuSurface.class.getResourceAsStream("/tin/blit.metal")) {
-            return new String(source.readAllBytes(), StandardCharsets.UTF_8);
-        }
+        var state = device.getDevice().newSamplerStateWithDescriptor(descriptor);
+        descriptor.release();
+        return state;
     }
 
     @Override
@@ -101,13 +106,18 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
 
     @Override
     public void acquireNextTexture() throws SurfaceException {
-        var next = layer.nextDrawable();
+        var next = AutoreleasePool.get(() -> {
+            var acquired = layer.nextDrawable();
+            if (!acquired.isNull()) {
+                acquired.retain();
+            }
+            return acquired;
+        });
         if (next.isNull()) {
             drawable = null;
             suboptimal = true;
             throw new SurfaceException("No drawable available");
         }
-        next.retain();
         drawable = next;
     }
 
@@ -116,6 +126,10 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
         if (drawable == null) {
             throw new IllegalStateException("No drawable acquired");
         }
+        AutoreleasePool.run(() -> blit(commandEncoder, textureView));
+    }
+
+    private void blit(CommandEncoderBackend commandEncoder, GpuTextureView textureView) {
         var source = ((MetalGpuTextureView) textureView).getView();
         int copyWidth = Math.min(width, textureView.getWidth(0));
         int copyHeight = Math.min(height, textureView.getHeight(0));
@@ -155,6 +169,7 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
         present();
         blit.release();
         sampler.release();
+        layer.release();
     }
 
     @Override

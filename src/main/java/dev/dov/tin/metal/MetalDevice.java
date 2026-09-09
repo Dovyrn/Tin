@@ -1,6 +1,7 @@
 package dev.dov.tin.metal;
 
 import com.mojang.blaze3d.GpuFormat;
+import com.mojang.blaze3d.GpuOutOfMemoryException;
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.pipeline.CompiledRenderPipeline;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
@@ -30,6 +31,7 @@ import com.mojang.blaze3d.textures.GpuSampler;
 import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import dev.dov.metalj.device.MTLCommandQueue;
+import dev.dov.metalj.device.MTLDevice;
 import dev.dov.metalj.device.Metal;
 import dev.dov.metalj.objc.NSRange;
 import dev.dov.metalj.objc.NSString;
@@ -45,6 +47,7 @@ import dev.dov.metalj.resources.textures.MTLTextureDescriptor;
 import dev.dov.metalj.resources.textures.MTLTextureType;
 import dev.dov.metalj.resources.textures.MTLTextureUsage;
 import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -53,14 +56,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.OptionalDouble;
 import java.util.Set;
+import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import lombok.Getter;
-import lombok.SneakyThrows;
 import org.jspecify.annotations.Nullable;
 import org.lwjgl.system.MemoryUtil;
+import org.slf4j.Logger;
 
 public class MetalDevice implements GpuDeviceBackend {
-    private static final org.slf4j.Logger LOGGER = LogUtils.getLogger();
+    private static final Logger LOGGER = LogUtils.getLogger();
     private static final int MAX_ANISOTROPY = 16;
 
     private static final int MAX_TEXTURE = 16384;
@@ -69,7 +74,7 @@ public class MetalDevice implements GpuDeviceBackend {
     private static final float MIP_THRESHOLD = 0.25f;
 
     @Getter
-    private final dev.dov.metalj.device.MTLDevice device;
+    private final MTLDevice device;
     @Getter
     private final MTLCommandQueue queue;
     private final Map<RenderPipeline, MetalRenderPipeline> pipelines = new IdentityHashMap<>();
@@ -79,23 +84,26 @@ public class MetalDevice implements GpuDeviceBackend {
     private final MetalClears clears;
     private MetalCommandEncoder encoder;
     private final List<String> messages = new ArrayList<>();
-    private final long window;
+    private final DeviceInfo info;
     private final ShaderSource shaders;
     private final GpuDebugOptions debug;
 
-    public MetalDevice(dev.dov.metalj.device.MTLDevice device, long window, ShaderSource shaders,
-            GpuDebugOptions debug) {
+    public MetalDevice(MTLDevice device, ShaderSource shaders, GpuDebugOptions debug) {
         this.device = device;
         this.queue = device.newCommandQueue();
         this.clears = new MetalClears(this);
-        this.window = window;
         this.shaders = shaders;
         this.debug = debug;
+        this.info = AutoreleasePool.get(this::info);
+    }
+
+    public boolean useLabels() {
+        return debug.useLabels();
     }
 
     @Override
-    public GpuSurfaceBackend createSurface(long windowHandle) {
-        return new MetalGpuSurface(this, windowHandle);
+    public GpuSurfaceBackend createSurface(long window) {
+        return new MetalGpuSurface(this, window);
     }
 
     public MetalCommandEncoder getEncoder() {
@@ -126,19 +134,27 @@ public class MetalDevice implements GpuDeviceBackend {
         descriptor.setLodMaxClamp(Math.max(lod, MIP_THRESHOLD));
         descriptor.setMaxAnisotropy(Math.max(maxAnisotropy, 1));
         var sampler = device.newSamplerStateWithDescriptor(descriptor);
-        assert !sampler.isNull() : "no metal sampler";
+        descriptor.release();
+        if (sampler.isNull()) {
+            throw new GpuOutOfMemoryException("Failed to create sampler");
+        }
         return new MetalGpuSampler(sampler, addressModeU, addressModeV, minFilter, magFilter, maxAnisotropy, maxLod);
     }
 
     @Override
     public GpuTexture createTexture(@Nullable Supplier<String> label, int usage, GpuFormat format, int width,
             int height, int depthOrLayers, int mipLevels) {
-        return createTexture(label == null ? null : label.get(), usage, format, width, height, depthOrLayers,
-                mipLevels);
+        return createTexture(label == null || !debug.useLabels() ? null : label.get(), usage, format, width, height,
+                depthOrLayers, mipLevels);
     }
 
     @Override
     public GpuTexture createTexture(@Nullable String label, int usage, GpuFormat format, int width, int height,
+            int depthOrLayers, int mipLevels) {
+        return AutoreleasePool.get(() -> texture(label, usage, format, width, height, depthOrLayers, mipLevels));
+    }
+
+    private GpuTexture texture(@Nullable String label, int usage, GpuFormat format, int width, int height,
             int depthOrLayers, int mipLevels) {
         boolean cube = (usage & GpuTexture.USAGE_CUBEMAP_COMPATIBLE) != 0;
         long pixelFormat = MetalConst.pixelFormat(format);
@@ -151,7 +167,7 @@ public class MetalDevice implements GpuDeviceBackend {
         }
         descriptor.setMipmapLevelCount(mipLevels);
         descriptor.setStorageMode(MTLStorageMode.MTLStorageModePrivate);
-        long flags = mipLevels > 1 ? MTLTextureUsage.MTLTextureUsagePixelFormatView : 0;
+        long flags = 0;
         if ((usage & GpuTexture.USAGE_TEXTURE_BINDING) != 0) {
             flags |= MTLTextureUsage.MTLTextureUsageShaderRead;
         }
@@ -160,7 +176,9 @@ public class MetalDevice implements GpuDeviceBackend {
         }
         descriptor.setUsage(flags);
         var texture = device.newTextureWithDescriptor(descriptor);
-        assert !texture.isNull() : "no metal texture for " + format + " " + width + "x" + height;
+        if (texture.isNull()) {
+            throw new GpuOutOfMemoryException("Failed to create " + format + " texture of " + width + "x" + height);
+        }
         if (debug.useLabels() && label != null) {
             texture.setLabel(NSString.stringWithUTF8String(label));
         }
@@ -172,9 +190,9 @@ public class MetalDevice implements GpuDeviceBackend {
         LOGGER.error(message);
     }
 
-    private void label(java.util.function.Consumer<NSString> target, @Nullable Supplier<String> label) {
+    private void label(Consumer<NSString> target, @Nullable Supplier<String> label) {
         if (debug.useLabels() && label != null) {
-            target.accept(NSString.stringWithUTF8String(label.get()));
+            AutoreleasePool.run(() -> target.accept(NSString.stringWithUTF8String(label.get())));
         }
     }
 
@@ -187,12 +205,13 @@ public class MetalDevice implements GpuDeviceBackend {
     public GpuTextureView createTextureView(GpuTexture texture, int baseMipLevel, int mipLevels) {
         var parent = ((MetalGpuTexture) texture).getTexture();
         if (baseMipLevel == 0 && mipLevels == texture.getMipLevels()) {
-            return new MetalGpuTextureView(parent, texture, baseMipLevel, mipLevels, false);
+            parent.retain();
+            return new MetalGpuTextureView(parent, texture, baseMipLevel, mipLevels);
         }
         try (var arena = Arena.ofConfined()) {
             var view = parent.newTextureViewWithPixelFormat(parent.pixelFormat(), parent.textureType(),
                     NSRange.of(arena, baseMipLevel, mipLevels), NSRange.of(arena, 0, texture.getDepthOrLayers()));
-            return new MetalGpuTextureView(view, texture, baseMipLevel, mipLevels, true);
+            return new MetalGpuTextureView(view, texture, baseMipLevel, mipLevels);
         }
     }
 
@@ -200,7 +219,9 @@ public class MetalDevice implements GpuDeviceBackend {
     public GpuBuffer createBuffer(@Nullable Supplier<String> label, int usage, long size) {
         var buffer = device.newBufferWithLength(Math.max(size, 1),
                 MTLResourceOptions.MTLResourceStorageModeShared);
-        assert !buffer.isNull() : "no metal buffer of " + size + " bytes";
+        if (buffer.isNull()) {
+            throw new GpuOutOfMemoryException("Failed to create buffer of " + size + " bytes");
+        }
         label(buffer::setLabel, label);
         return new MetalGpuBuffer(buffer, usage, size);
     }
@@ -209,13 +230,16 @@ public class MetalDevice implements GpuDeviceBackend {
     public GpuBuffer createBuffer(@Nullable Supplier<String> label, int usage, ByteBuffer data) {
         long size = data.remaining();
         usage |= GpuBuffer.USAGE_COPY_DST;
-        var bytes = java.lang.foreign.MemorySegment.ofAddress(MemoryUtil.memAddress(data)).reinterpret(size);
+        var bytes = MemorySegment.ofAddress(MemoryUtil.memAddress(data)).reinterpret(size);
         var buffer = device.newBufferWithBytes(bytes, size, MTLResourceOptions.MTLResourceStorageModeShared);
+        if (buffer.isNull()) {
+            throw new GpuOutOfMemoryException("Failed to create buffer of " + size + " bytes");
+        }
         label(buffer::setLabel, label);
         return new MetalGpuBuffer(buffer, usage, size);
     }
 
-    public MetalTransientBuffer createTransientBuffer(long size, java.util.function.LongSupplier submits) {
+    public MetalTransientBuffer createTransientBuffer(long size, LongSupplier submits) {
         var buffer = device.newBufferWithLength(size, MTLResourceOptions.MTLResourceStorageModeShared);
         int usage = GpuBuffer.USAGE_COPY_SRC | GpuBuffer.USAGE_COPY_DST | GpuBuffer.USAGE_VERTEX
                 | GpuBuffer.USAGE_INDEX | GpuBuffer.USAGE_UNIFORM | GpuBuffer.USAGE_UNIFORM_TEXEL_BUFFER;
@@ -236,7 +260,8 @@ public class MetalDevice implements GpuDeviceBackend {
 
     @Override
     public CompiledRenderPipeline precompilePipeline(RenderPipeline pipeline, @Nullable ShaderSource shaderSource) {
-        return pipelines.computeIfAbsent(pipeline, key -> compile(key, shaderSource == null ? shaders : shaderSource));
+        return pipelines.computeIfAbsent(pipeline,
+                key -> AutoreleasePool.get(() -> compile(key, shaderSource == null ? shaders : shaderSource)));
     }
 
     public MetalRenderPipeline compiled(RenderPipeline pipeline) {
@@ -272,11 +297,21 @@ public class MetalDevice implements GpuDeviceBackend {
         var translation = MetalShaders.translate(vertex.spirv(), fragment.spirv(),
                 new Request(inputs, texels, uniforms, samplers));
         if (translation.error() != null) {
-            messages.add("Couldn't compile pipeline " + pipeline.getLocation() + ": " + translation.error());
+            message("Couldn't compile pipeline " + pipeline.getLocation() + ": " + translation.error());
             return new MetalRenderPipeline(this, pipeline, null, null, translation, formats);
         }
-        return new MetalRenderPipeline(this, pipeline, function(translation.vertex(), translation.vertexEntry()),
-                function(translation.fragment(), translation.fragmentEntry()), translation, formats);
+        try {
+            var vertexFunction = function(translation.vertex(), translation.vertexEntry());
+            var fragmentFunction = function(translation.fragment(), translation.fragmentEntry());
+            var compiled = new MetalRenderPipeline(this, pipeline, vertexFunction, fragmentFunction, translation,
+                    formats);
+            vertexFunction.release();
+            fragmentFunction.release();
+            return compiled;
+        } catch (IllegalStateException e) {
+            message("Couldn't compile pipeline " + pipeline.getLocation() + ": " + e.getMessage());
+            return new MetalRenderPipeline(this, pipeline, null, null, translation, formats);
+        }
     }
 
     private IntermediaryShaderModule spirv(RenderPipeline pipeline, ShaderType stage, ShaderSource source) {
@@ -308,18 +343,19 @@ public class MetalDevice implements GpuDeviceBackend {
     }
 
     private MTLFunction function(String source, String entry) {
-        var library = device.newLibraryWithSource(NSString.stringWithUTF8String(source), options());
-        var function = library.newFunctionWithName(NSString.stringWithUTF8String(entry));
-        if (function.isNull()) {
-            throw new IllegalStateException("no function " + entry + " in the translated library");
-        }
-        return function;
-    }
-
-    private static MTLCompileOptions options() {
         var options = MTLCompileOptions.new_();
         options.setLanguageVersion(MTLLanguageVersion.MTLLanguageVersion3_0);
-        return options;
+        try {
+            var library = device.newLibraryWithSource(NSString.stringWithUTF8String(source), options);
+            var function = library.newFunctionWithName(NSString.stringWithUTF8String(entry));
+            library.release();
+            if (function.isNull()) {
+                throw new IllegalStateException("no function " + entry + " in the translated library");
+            }
+            return function;
+        } finally {
+            options.release();
+        }
     }
 
     @Override
@@ -345,6 +381,8 @@ public class MetalDevice implements GpuDeviceBackend {
             encoder.close();
         }
         clearPipelineCache();
+        clears.close();
+        queue.release();
         compiler.close();
     }
 
@@ -354,7 +392,7 @@ public class MetalDevice implements GpuDeviceBackend {
     }
 
     private int uniformAlign() {
-        return device.supportsFamily(dev.dov.metalj.device.MTLDevice.MTLGPUFamilyApple7) ? 32 : 256;
+        return device.supportsFamily(MTLDevice.MTLGPUFamilyApple7) ? 32 : 256;
     }
 
     private static String vendor(String name) {
@@ -379,6 +417,10 @@ public class MetalDevice implements GpuDeviceBackend {
 
     @Override
     public DeviceInfo getDeviceInfo() {
+        return info;
+    }
+
+    private DeviceInfo info() {
         var limits = new DeviceLimits(MAX_ANISOTROPY, uniformAlign(), MAX_TEXTURE,
                 device.recommendedMaxWorkingSetSize(), 0, MAX_ATTACHMENTS);
         var features = new DeviceFeatures(true, false, false, true, true, true, true);

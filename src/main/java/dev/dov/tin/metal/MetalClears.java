@@ -17,10 +17,8 @@ import dev.dov.metalj.pipelines.render.MTLRenderPipelineState;
 import dev.dov.metalj.pipelines.shaders.MTLCompileOptions;
 import dev.dov.metalj.resources.textures.MTLPixelFormat;
 import java.lang.foreign.Arena;
-import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
-import lombok.SneakyThrows;
 import org.jspecify.annotations.Nullable;
 import org.joml.Vector4fc;
 
@@ -32,17 +30,29 @@ public class MetalClears {
 
     public MetalClears(MetalDevice device) {
         this.device = device;
-        var writes = MTLDepthStencilDescriptor.new_();
-        writes.setDepthCompareFunction(MTLCompareFunction.MTLCompareFunctionAlways);
-        writes.setDepthWriteEnabled(true);
-        depthState = device.getDevice().newDepthStencilStateWithDescriptor(writes);
-        var keeps = MTLDepthStencilDescriptor.new_();
-        keeps.setDepthCompareFunction(MTLCompareFunction.MTLCompareFunctionAlways);
-        keeps.setDepthWriteEnabled(false);
-        colorState = device.getDevice().newDepthStencilStateWithDescriptor(keeps);
+        var descriptor = MTLDepthStencilDescriptor.new_();
+        descriptor.setDepthCompareFunction(MTLCompareFunction.MTLCompareFunctionAlways);
+        descriptor.setDepthWriteEnabled(true);
+        depthState = device.getDevice().newDepthStencilStateWithDescriptor(descriptor);
+        descriptor.setDepthWriteEnabled(false);
+        colorState = device.getDevice().newDepthStencilStateWithDescriptor(descriptor);
+        descriptor.release();
+    }
+
+    public void close() {
+        for (var pipeline : pipelines.values()) {
+            pipeline.release();
+        }
+        depthState.release();
+        colorState.release();
     }
 
     public void region(MTLCommandBuffer cmd, @Nullable GpuTexture color, @Nullable Vector4fc clearColor,
+            @Nullable GpuTexture depth, double clearDepth, int x, int y, int width, int height) {
+        AutoreleasePool.run(() -> clear(cmd, color, clearColor, depth, clearDepth, x, y, width, height));
+    }
+
+    private void clear(MTLCommandBuffer cmd, @Nullable GpuTexture color, @Nullable Vector4fc clearColor,
             @Nullable GpuTexture depth, double clearDepth, int x, int y, int width, int height) {
         var pass = MTLRenderPassDescriptor.renderPassDescriptor();
         long format = MTLPixelFormat.MTLPixelFormatInvalid;
@@ -79,15 +89,20 @@ public class MetalClears {
 
     private MTLRenderPipelineState pipeline(long format, boolean depth) {
         long key = format * 2 + (depth ? 1 : 0);
-        return pipelines.computeIfAbsent(key, ignored -> build(format, depth));
+        return pipelines.computeIfAbsent(key, ignored -> AutoreleasePool.get(() -> build(format, depth)));
     }
 
     private MTLRenderPipelineState build(long format, boolean depth) {
-        var library = device.getDevice().newLibraryWithSource(NSString.stringWithUTF8String(source()),
-                MTLCompileOptions.new_());
+        var options = MTLCompileOptions.new_();
+        var library = device.getDevice().newLibraryWithSource(
+                NSString.stringWithUTF8String(MetalShaders.source("/tin/clear.metal")), options);
+        options.release();
+        var vertex = library.newFunctionWithName(NSString.stringWithUTF8String("clear_vertex"));
+        var fragment = library.newFunctionWithName(NSString.stringWithUTF8String("clear_fragment"));
+        library.release();
         var descriptor = MTLRenderPipelineDescriptor.new_();
-        descriptor.setVertexFunction(library.newFunctionWithName(NSString.stringWithUTF8String("clear_vertex")));
-        descriptor.setFragmentFunction(library.newFunctionWithName(NSString.stringWithUTF8String("clear_fragment")));
+        descriptor.setVertexFunction(vertex);
+        descriptor.setFragmentFunction(fragment);
         if (format != MTLPixelFormat.MTLPixelFormatInvalid) {
             descriptor.colorAttachments()
                     .objectAtIndexedSubscript(0)
@@ -96,13 +111,10 @@ public class MetalClears {
         if (depth) {
             descriptor.setDepthAttachmentPixelFormat(MTLPixelFormat.MTLPixelFormatDepth32Float);
         }
-        return device.getDevice().newRenderPipelineStateWithDescriptor(descriptor);
-    }
-
-    @SneakyThrows
-    private static String source() {
-        try (var stream = MetalClears.class.getResourceAsStream("/tin/clear.metal")) {
-            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
-        }
+        var state = device.getDevice().newRenderPipelineStateWithDescriptor(descriptor);
+        descriptor.release();
+        vertex.release();
+        fragment.release();
+        return state;
     }
 }

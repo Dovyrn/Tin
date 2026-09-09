@@ -9,12 +9,13 @@ import dev.dov.metalj.debug.MTLCounterSampleBufferDescriptor;
 import dev.dov.metalj.debug.MTLCommonCounter;
 import dev.dov.metalj.debug.MTLCounterSet;
 import dev.dov.metalj.resources.MTLStorageMode;
+import java.util.Arrays;
 import java.util.OptionalLong;
 import lombok.Getter;
 
 public class MetalQueryPool implements GpuQueryPool {
-    @Getter
     private final int size;
+    @Getter
     private final MTLCounterSampleBuffer samples;
     private final long[] written;
     private final MetalDevice device;
@@ -23,17 +24,22 @@ public class MetalQueryPool implements GpuQueryPool {
         this.size = size;
         this.device = device;
         this.written = new long[size];
-        java.util.Arrays.fill(written, Long.MIN_VALUE);
+        Arrays.fill(written, Long.MIN_VALUE);
+        samples = AutoreleasePool.get(() -> samples(device, size));
+    }
+
+    private static MTLCounterSampleBuffer samples(MetalDevice device, int size) {
         var set = timestamps(device);
         if (set == null) {
-            samples = null;
-            return;
+            return null;
         }
         var descriptor = MTLCounterSampleBufferDescriptor.new_();
         descriptor.setCounterSet(set);
         descriptor.setStorageMode(MTLStorageMode.MTLStorageModeShared);
         descriptor.setSampleCount(size);
-        samples = device.getDevice().newCounterSampleBufferWithDescriptor(descriptor);
+        var buffer = device.getDevice().newCounterSampleBufferWithDescriptor(descriptor);
+        descriptor.release();
+        return buffer;
     }
 
     private static MTLCounterSet timestamps(MetalDevice device) {
@@ -61,11 +67,7 @@ public class MetalQueryPool implements GpuQueryPool {
     }
 
     public void record(int index) {
-        written[index] = ((MetalCommandEncoder) device.createCommandEncoder()).getSubmits();
-    }
-
-    public MTLCounterSampleBuffer samples() {
-        return samples;
+        written[index] = device.getEncoder().getSubmits();
     }
 
     @Override
@@ -78,11 +80,11 @@ public class MetalQueryPool implements GpuQueryPool {
         if (samples == null || written[index] == Long.MIN_VALUE) {
             return OptionalLong.empty();
         }
-        if (((MetalCommandEncoder) device.createCommandEncoder()).getCompleted() < written[index]) {
+        if (device.getEncoder().getCompleted() < written[index]) {
             return OptionalLong.empty();
         }
-        var data = samples.resolveCounterRange(index, 1).bytes();
-        long value = MTLCounterResultTimestamp.timestamp(data, 0);
+        long value = AutoreleasePool.get(
+                () -> MTLCounterResultTimestamp.timestamp(samples.resolveCounterRange(index, 1).bytes(), 0));
         if (value == -1) {
             return OptionalLong.empty();
         }

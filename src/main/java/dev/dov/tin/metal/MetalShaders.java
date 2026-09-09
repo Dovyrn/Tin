@@ -9,6 +9,7 @@ import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import lombok.SneakyThrows;
@@ -41,6 +42,13 @@ public class MetalShaders {
             library.toFile().deleteOnExit();
             directory.toFile().deleteOnExit();
             return SymbolLookup.libraryLookup(library, ARENA);
+        }
+    }
+
+    @SneakyThrows
+    public String source(String path) {
+        try (var stream = MetalShaders.class.getResourceAsStream(path)) {
+            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
         }
     }
 

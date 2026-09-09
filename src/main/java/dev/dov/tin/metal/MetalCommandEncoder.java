@@ -22,23 +22,29 @@ import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
+import lombok.Getter;
+import org.joml.Vector4f;
 import org.joml.Vector4fc;
 
 public class MetalCommandEncoder implements CommandEncoderBackend {
-    private static final int IN_FLIGHT = 2;
+    static final int IN_FLIGHT = 2;
 
-    @lombok.Getter
+    @Getter
     private final MetalDevice device;
     private final MetalTransientMemory memory;
     private final List<Runnable> pending = new ArrayList<>();
     private final Deque<List<Runnable>> retired = new ArrayDeque<>();
     private final NavigableMap<Long, MTLCommandBuffer> batches = new TreeMap<>();
-    @lombok.Getter
+    private final Map<GpuTexture, Vector4fc> colorClears = new IdentityHashMap<>();
+    private final Map<GpuTexture, Double> depthClears = new IdentityHashMap<>();
+    @Getter
     private long submits;
-    @lombok.Getter
+    @Getter
     private long completed = -1;
     private MTLCommandBuffer cmd;
     private MetalRenderPass pass;
@@ -53,10 +59,42 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
             throw new IllegalStateException("Cannot start command buffer while inside RenderPass");
         }
         if (cmd == null) {
-            cmd = device.getQueue().commandBuffer();
-            cmd.retain();
+            cmd = AutoreleasePool.get(() -> {
+                var created = device.getQueue().commandBuffer();
+                created.retain();
+                return created;
+            });
         }
+        flushClears();
         return cmd;
+    }
+
+    private void flushClears() {
+        if (colorClears.isEmpty() && depthClears.isEmpty()) {
+            return;
+        }
+        var colors = new IdentityHashMap<>(colorClears);
+        var depths = new IdentityHashMap<>(depthClears);
+        colorClears.clear();
+        depthClears.clear();
+        for (var entry : colors.entrySet()) {
+            if (!entry.getKey().isClosed()) {
+                clearLevel(entry.getKey(), entry.getValue(), null, 0, 0);
+            }
+        }
+        for (var entry : depths.entrySet()) {
+            if (!entry.getKey().isClosed()) {
+                clearLevel(null, null, entry.getKey(), entry.getValue(), 0);
+            }
+        }
+    }
+
+    public Vector4fc takeColorClear(GpuTexture texture) {
+        return colorClears.remove(texture);
+    }
+
+    public Double takeDepthClear(GpuTexture texture) {
+        return depthClears.remove(texture);
     }
 
     @Override
@@ -67,11 +105,10 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
         memory.endSubmit();
         retired.addLast(List.copyOf(pending));
         pending.clear();
-        if (cmd != null) {
-            cmd.commit();
-            batches.put(submits, cmd);
-            cmd = null;
-        }
+        var buffer = commandBuffer();
+        buffer.commit();
+        batches.put(submits, buffer);
+        cmd = null;
         submits++;
         while (batches.size() > IN_FLIGHT) {
             finish(batches.firstKey());
@@ -144,6 +181,16 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
     }
 
     private void clear(GpuTexture color, Vector4fc clearColor, GpuTexture depth, double clearDepth) {
+        boolean flat = (color == null || color.getMipLevels() == 1) && (depth == null || depth.getMipLevels() == 1);
+        if (flat) {
+            if (color != null) {
+                colorClears.put(color, new Vector4f(clearColor));
+            }
+            if (depth != null) {
+                depthClears.put(depth, clearDepth);
+            }
+            return;
+        }
         int levels = Math.max(color == null ? 0 : color.getMipLevels(), depth == null ? 0 : depth.getMipLevels());
         for (int level = 0; level < levels; level++) {
             clearLevel(color, clearColor, depth, clearDepth, level);
@@ -151,8 +198,12 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
     }
 
     private void clearLevel(GpuTexture color, Vector4fc clearColor, GpuTexture depth, double clearDepth, int level) {
+        AutoreleasePool.run(() -> clearNow(color, clearColor, depth, clearDepth, level));
+    }
+
+    private void clearNow(GpuTexture color, Vector4fc clearColor, GpuTexture depth, double clearDepth, int level) {
         var pass = MTLRenderPassDescriptor.renderPassDescriptor();
-        if (color != null) {
+        if (color != null && level < color.getMipLevels()) {
             var attachment = pass.colorAttachments().objectAtIndexedSubscript(0);
             attachment.setTexture(((MetalGpuTexture) color).getTexture());
             attachment.setLevel(level);
@@ -163,7 +214,7 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
                         clearColor.w()));
             }
         }
-        if (depth != null) {
+        if (depth != null && level < depth.getMipLevels()) {
             var attachment = pass.depthAttachment();
             attachment.setTexture(((MetalGpuTexture) depth).getTexture());
             attachment.setLevel(level);
@@ -175,7 +226,7 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
     }
 
     private GpuBufferSlice staging(ByteBuffer data) {
-        return memory.uploadStaging(data, 1, GpuBuffer.USAGE_COPY_SRC);
+        return memory.uploadStaging(data, 4, GpuBuffer.USAGE_COPY_SRC);
     }
 
     @Override
@@ -185,9 +236,11 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
 
     @Override
     public void copyToBuffer(GpuBufferSlice source, GpuBufferSlice target) {
-        var blit = commandBuffer().blitCommandEncoder();
-        blit.copyFromBuffer(buffer(source), source.offset(), buffer(target), target.offset(), source.length());
-        blit.endEncoding();
+        AutoreleasePool.run(() -> {
+            var blit = commandBuffer().blitCommandEncoder();
+            blit.copyFromBuffer(buffer(source), source.offset(), buffer(target), target.offset(), source.length());
+            blit.endEncoding();
+        });
     }
 
     public static MTLBuffer buffer(GpuBufferSlice slice) {
@@ -226,13 +279,15 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
 
     private void copyToTexture(MTLBuffer source, long offset, long row, GpuTexture destination, int mipLevel,
             int layer, int x, int y, int width, int height) {
-        var blit = commandBuffer().blitCommandEncoder();
-        try (var arena = Arena.ofConfined()) {
-            blit.copyFromBuffer(source, offset, row, row * height, MTLSize.of(arena, width, height, 1),
-                    ((MetalGpuTexture) destination).getTexture(), layer, mipLevel,
-                    MTLOrigin.of(arena, x, y, 0));
-        }
-        blit.endEncoding();
+        AutoreleasePool.run(() -> {
+            var blit = commandBuffer().blitCommandEncoder();
+            try (var arena = Arena.ofConfined()) {
+                blit.copyFromBuffer(source, offset, row, row * height, MTLSize.of(arena, width, height, 1),
+                        ((MetalGpuTexture) destination).getTexture(), layer, mipLevel,
+                        MTLOrigin.of(arena, x, y, 0));
+            }
+            blit.endEncoding();
+        });
     }
 
     @Override
@@ -246,26 +301,31 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
     public void copyTextureToBuffer(GpuTexture source, GpuBuffer destination, long offset, Runnable callback,
             int mipLevel, int x, int y, int width, int height) {
         long row = (long) width * source.getFormat().blockSize();
-        var blit = commandBuffer().blitCommandEncoder();
-        try (var arena = Arena.ofConfined()) {
-            blit.copyFromTexture(((MetalGpuTexture) source).getTexture(), 0, mipLevel, MTLOrigin.of(arena, x, y, 0),
-                    MTLSize.of(arena, width, height, 1), ((MetalGpuBuffer) destination).getBuffer(), offset, row,
-                    row * height);
-        }
-        blit.endEncoding();
-        pending.addLast(callback);
+        AutoreleasePool.run(() -> {
+            var blit = commandBuffer().blitCommandEncoder();
+            try (var arena = Arena.ofConfined()) {
+                blit.copyFromTexture(((MetalGpuTexture) source).getTexture(), 0, mipLevel,
+                        MTLOrigin.of(arena, x, y, 0), MTLSize.of(arena, width, height, 1),
+                        ((MetalGpuBuffer) destination).getBuffer(), offset, row, row * height);
+            }
+            blit.endEncoding();
+        });
+        pending.add(callback);
     }
 
     @Override
     public void copyTextureToTexture(GpuTexture source, GpuTexture destination, int mipLevel, int destX, int destY,
             int sourceX, int sourceY, int width, int height) {
-        var blit = commandBuffer().blitCommandEncoder();
-        try (var arena = Arena.ofConfined()) {
-            blit.copyFromTexture(((MetalGpuTexture) source).getTexture(), 0, mipLevel,
-                    MTLOrigin.of(arena, sourceX, sourceY, 0), MTLSize.of(arena, width, height, 1),
-                    ((MetalGpuTexture) destination).getTexture(), 0, mipLevel, MTLOrigin.of(arena, destX, destY, 0));
-        }
-        blit.endEncoding();
+        AutoreleasePool.run(() -> {
+            var blit = commandBuffer().blitCommandEncoder();
+            try (var arena = Arena.ofConfined()) {
+                blit.copyFromTexture(((MetalGpuTexture) source).getTexture(), 0, mipLevel,
+                        MTLOrigin.of(arena, sourceX, sourceY, 0), MTLSize.of(arena, width, height, 1),
+                        ((MetalGpuTexture) destination).getTexture(), 0, mipLevel,
+                        MTLOrigin.of(arena, destX, destY, 0));
+            }
+            blit.endEncoding();
+        });
     }
 
     public void waitIdle() {
@@ -326,6 +386,6 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
 
     @Override
     public void writeTimestamp(GpuQueryPool pool, int index) {
-        ((MetalQueryPool) pool).write(commandBuffer(), index);
+        AutoreleasePool.run(() -> ((MetalQueryPool) pool).write(commandBuffer(), index));
     }
 }

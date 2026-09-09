@@ -10,6 +10,7 @@ public class MetalTransientBuffer extends GpuBuffer {
     @Getter
     private final MTLBuffer buffer;
     private final LongSupplier submits;
+    @Getter
     private long index;
     private boolean closed;
 

@@ -26,6 +26,10 @@ public class MetalBackend implements GpuBackend {
 
     @Override
     public void handleWindowCreationErrors(GLFWErrorCapture.@NotNull Error error) throws BackendCreationException {
+        if (error == null) {
+            throw new BackendCreationException("Failed to create window for Metal",
+                    BackendCreationException.Reason.OTHER);
+        }
         throw new BackendCreationException(String.format(Locale.ROOT, "GLFW_ERROR: 0x%X", error.error()),
                 BackendCreationException.Reason.GLFW_ERROR);
     }
@@ -37,6 +41,6 @@ public class MetalBackend implements GpuBackend {
         if (device.isNull() || !device.supportsFamily(MTLDevice.MTLGPUFamilyMetal3)) {
             throw new BackendCreationException("Metal 3 is required", BackendCreationException.Reason.OTHER);
         }
-        return new GpuDevice(new MetalDevice(device, window, shaders, debug), loader);
+        return new GpuDevice(new MetalDevice(device, shaders, debug), loader);
     }
 }

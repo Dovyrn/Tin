@@ -74,7 +74,7 @@ public class MetalConst {
             case RG11B10_FLOAT -> MTLPixelFormat.MTLPixelFormatRG11B10Float;
             case D32_FLOAT -> MTLPixelFormat.MTLPixelFormatDepth32Float;
             case D32_FLOAT_S8_UINT -> MTLPixelFormat.MTLPixelFormatDepth32Float_Stencil8;
-            case D24_UNORM_S8_UINT -> MTLPixelFormat.MTLPixelFormatDepth24Unorm_Stencil8;
+            case D24_UNORM_S8_UINT -> MTLPixelFormat.MTLPixelFormatDepth32Float_Stencil8;
             case D16_UNORM -> MTLPixelFormat.MTLPixelFormatDepth16Unorm;
             case S8_UINT -> MTLPixelFormat.MTLPixelFormatStencil8;
             default -> throw new IllegalArgumentException("no metal format for " + format);

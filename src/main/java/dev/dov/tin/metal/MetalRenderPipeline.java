@@ -1,13 +1,11 @@
 package dev.dov.tin.metal;
 
 import com.mojang.blaze3d.GpuFormat;
-import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import com.mojang.blaze3d.PrimitiveTopology;
+import com.mojang.blaze3d.platform.CompareOp;
 import com.mojang.blaze3d.platform.PolygonMode;
 import com.mojang.blaze3d.pipeline.CompiledRenderPipeline;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
-import com.mojang.blaze3d.textures.GpuSampler;
-import com.mojang.blaze3d.textures.GpuTextureView;
 import dev.dov.metalj.commands.encoders.MTLRenderCommandEncoder;
 import dev.dov.metalj.objc.NSString;
 import dev.dov.metalj.pipelines.depth.MTLDepthStencilDescriptor;
@@ -17,37 +15,31 @@ import dev.dov.metalj.pipelines.render.MTLRenderPipelineState;
 import dev.dov.metalj.pipelines.shaders.MTLFunction;
 import dev.dov.metalj.pipelines.vertex.MTLVertexDescriptor;
 import dev.dov.metalj.pipelines.vertex.MTLVertexStepFunction;
-import dev.dov.metalj.resources.MTLResourceOptions;
 import dev.dov.metalj.resources.textures.MTLPixelFormat;
-import dev.dov.metalj.resources.textures.MTLTextureDescriptor;
-import dev.dov.metalj.resources.textures.MTLTextureUsage;
 import java.util.Map;
 import lombok.Getter;
 import org.jspecify.annotations.Nullable;
 
 public class MetalRenderPipeline implements CompiledRenderPipeline {
-    private static final float DEPTH_UNIT = 1.0f / (1 << 23);
     private final MetalDevice device;
-    private final RenderPipeline pipeline;
+    @Getter
     private final Translation translation;
+    @Getter
     private final Map<String, GpuFormat> texels;
     private final long fill;
     @Getter
     private final boolean fan;
-    @Getter
-    private final float biasScaleFactor;
     private final MTLDepthStencilState depthState;
     private final long topology;
     private final long cull;
     private final float biasScale;
     private final float biasConstant;
     private final @Nullable MTLRenderPipelineState state;
-    private final @Nullable MTLRenderPipelineState stateNoDepth;
+    private final @Nullable MTLRenderPipelineState noDepth;
 
     public MetalRenderPipeline(MetalDevice device, RenderPipeline pipeline, MTLFunction vertex,
             MTLFunction fragment, Translation translation, Map<String, GpuFormat> texels) {
         this.device = device;
-        this.pipeline = pipeline;
         this.translation = translation;
         this.texels = texels;
         fan = pipeline.getPrimitiveTopology() == PrimitiveTopology.TRIANGLE_FAN;
@@ -57,24 +49,24 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
         var depth = pipeline.getDepthStencilState();
         var depthDescriptor = MTLDepthStencilDescriptor.new_();
         depthDescriptor.setDepthCompareFunction(depth == null
-                ? MetalConst.compareFunction(com.mojang.blaze3d.platform.CompareOp.ALWAYS_PASS)
+                ? MetalConst.compareFunction(CompareOp.ALWAYS_PASS)
                 : MetalConst.compareFunction(depth.depthTest()));
         depthDescriptor.setDepthWriteEnabled(depth != null && depth.writeDepth());
         depthState = device.getDevice().newDepthStencilStateWithDescriptor(depthDescriptor);
+        depthDescriptor.release();
         biasScale = depth == null ? 0 : depth.depthBiasScaleFactor();
-        biasConstant = depth == null ? 0 : depth.depthBiasConstant() * DEPTH_UNIT;
-        biasScaleFactor = biasScale;
+        biasConstant = depth == null ? 0 : depth.depthBiasConstant();
         topology = MetalConst.primitiveType(pipeline.getPrimitiveTopology());
         cull = pipeline.isCull()
                 ? MTLRenderCommandEncoder.MTLCullModeBack
                 : MTLRenderCommandEncoder.MTLCullModeNone;
         if (vertex == null || translation == null) {
             state = null;
-            stateNoDepth = null;
+            noDepth = null;
             return;
         }
         var descriptor = MTLRenderPipelineDescriptor.new_();
-        if (device.isDebuggingEnabled()) {
+        if (device.useLabels()) {
             descriptor.setLabel(NSString.stringWithUTF8String(pipeline.getLocation().toString()));
         }
         descriptor.setVertexFunction(vertex);
@@ -115,8 +107,9 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
             compiled = null;
             compiledNoDepth = null;
         }
+        descriptor.release();
         state = compiled;
-        stateNoDepth = compiledNoDepth;
+        noDepth = compiledNoDepth;
     }
 
     private static MTLVertexDescriptor layout(RenderPipeline pipeline) {
@@ -147,22 +140,6 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
         return layout;
     }
 
-    private void bindTexel(MTLRenderCommandEncoder pass, Binding binding, GpuBufferSlice slice) {
-        if (slice == null) {
-            throw new IllegalStateException("missing texel buffer " + binding.name());
-        }
-        var format = texels.get(binding.name());
-        long pixel = format.blockSize();
-        long width = (slice.length()) / pixel;
-        var descriptor = MTLTextureDescriptor.textureBufferDescriptorWithPixelFormat(MetalConst.pixelFormat(format),
-                width, MTLResourceOptions.MTLResourceStorageModeShared, MTLTextureUsage.MTLTextureUsageShaderRead);
-        var view = MetalCommandEncoder.buffer(slice).newTextureWithDescriptor(descriptor, slice.offset(),
-                width * pixel);
-        pass.setVertexTexture(view, binding.index());
-        pass.setFragmentTexture(view, binding.index());
-        device.getEncoder().retire(view::release);
-    }
-
     @Override
     public boolean isValid() {
         return state != null;
@@ -172,8 +149,8 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
         if (state != null) {
             state.release();
         }
-        if (stateNoDepth != null) {
-            stateNoDepth.release();
+        if (noDepth != null) {
+            noDepth.release();
         }
         depthState.release();
     }
@@ -183,7 +160,7 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
     }
 
     public void bind(MTLRenderCommandEncoder pass, boolean depth) {
-        var chosen = depth ? state : stateNoDepth == null ? state : stateNoDepth;
+        var chosen = depth || noDepth == null ? state : noDepth;
         if (chosen == null) {
             throw new IllegalStateException("pipeline does not fit this pass");
         }
@@ -191,37 +168,6 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
         pass.setDepthStencilState(depthState);
         pass.setCullMode(cull);
         pass.setTriangleFillMode(fill);
-        if (biasConstant != 0 && biasScale != 0) {
-            pass.setDepthBias(biasConstant, biasScale, 0);
-        }
-    }
-
-    public void bindResources(MTLRenderCommandEncoder pass, Map<String, GpuBufferSlice> uniforms,
-            Map<String, GpuTextureView> views, Map<String, GpuSampler> samplers) {
-        for (var binding : translation.uniforms()) {
-            var value = uniforms.get(binding.name());
-            if (value == null) {
-                throw new IllegalStateException("missing uniform " + binding.name());
-            }
-            var buffer = ((MetalGpuBuffer) value.buffer()).getBuffer();
-            pass.setVertexBuffer(buffer, value.offset(), binding.index());
-            pass.setFragmentBuffer(buffer, value.offset(), binding.index());
-        }
-        for (var binding : translation.textures()) {
-            if (binding.texel()) {
-                bindTexel(pass, binding, uniforms.get(binding.name()));
-                continue;
-            }
-            var view = views.get(binding.name());
-            if (view == null) {
-                throw new IllegalStateException("missing texture " + binding.name());
-            }
-            var texture = ((MetalGpuTextureView) view).getView();
-            var sampler = ((MetalGpuSampler) samplers.get(binding.name())).getSampler();
-            pass.setVertexTexture(texture, binding.index());
-            pass.setVertexSamplerState(sampler, binding.index());
-            pass.setFragmentTexture(texture, binding.index());
-            pass.setFragmentSamplerState(sampler, binding.index());
-        }
+        pass.setDepthBias(biasConstant, biasScale, 0);
     }
 }

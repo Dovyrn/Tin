@@ -5,11 +5,13 @@ import com.mojang.blaze3d.buffers.GpuBufferSlice;
 
 public class MetalTransientView extends GpuBuffer {
     private final MetalTransientBuffer block;
+    private final long index;
     private boolean closed;
 
     public MetalTransientView(MetalTransientBuffer block, int usage) {
         super(usage, block.size());
         this.block = block;
+        this.index = block.getIndex();
     }
 
     public MetalTransientBuffer block() {
@@ -18,7 +20,7 @@ public class MetalTransientView extends GpuBuffer {
 
     @Override
     public boolean isClosed() {
-        return closed || block.isClosed();
+        return closed || index != block.getIndex() || block.isClosed();
     }
 
     @Override
