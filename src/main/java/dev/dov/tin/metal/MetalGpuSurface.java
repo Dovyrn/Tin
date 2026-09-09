@@ -15,6 +15,7 @@ import dev.dov.metalj.device.NSWindow;
 import dev.dov.metalj.commands.encoders.MTLRenderCommandEncoder;
 import dev.dov.metalj.objc.CGSize;
 import dev.dov.metalj.objc.NSString;
+import dev.dov.metalj.objc.ObjC;
 import dev.dov.metalj.pipelines.render.MTLRenderPipelineDescriptor;
 import dev.dov.metalj.pipelines.render.MTLRenderPipelineState;
 import dev.dov.metalj.pipelines.shaders.MTLCompileOptions;
@@ -31,6 +32,7 @@ import org.lwjgl.glfw.GLFWNativeCocoa;
 
 public class MetalGpuSurface implements GpuSurfaceBackend {
     private final MetalDevice device;
+    private final NSWindow cocoa;
     private final CAMetalLayer layer;
     private final MTLRenderPipelineState blit;
     private final MTLSamplerState sampler;
@@ -41,7 +43,7 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
 
     public MetalGpuSurface(MetalDevice device, long window) {
         this.device = device;
-        var cocoa = NSWindow.of(GLFWNativeCocoa.glfwGetCocoaWindow(window));
+        cocoa = NSWindow.of(GLFWNativeCocoa.glfwGetCocoaWindow(window));
         layer = CAMetalLayer.layer();
         layer.setDevice(device.getDevice());
         layer.setPixelFormat(MTLPixelFormat.MTLPixelFormatBGRA8Unorm);
@@ -68,8 +70,8 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
 
     private MTLSamplerState blitSampler() {
         var descriptor = MTLSamplerDescriptor.new_();
-        descriptor.setMinFilter(MTLSamplerMinMagFilter.MTLSamplerMinMagFilterLinear);
-        descriptor.setMagFilter(MTLSamplerMinMagFilter.MTLSamplerMinMagFilterLinear);
+        descriptor.setMinFilter(MTLSamplerMinMagFilter.MTLSamplerMinMagFilterNearest);
+        descriptor.setMagFilter(MTLSamplerMinMagFilter.MTLSamplerMinMagFilterNearest);
         return device.getDevice().newSamplerStateWithDescriptor(descriptor);
     }
 
@@ -84,6 +86,7 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
     public void configure(GpuSurface.Configuration config) {
         width = config.width();
         height = config.height();
+        layer.setContentsScale(cocoa.backingScaleFactor());
         try (var arena = Arena.ofConfined()) {
             layer.setDrawableSize(CGSize.of(arena, width, height));
         }
@@ -98,19 +101,24 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
 
     @Override
     public void acquireNextTexture() throws SurfaceException {
-        drawable = layer.nextDrawable();
-        if (drawable.isNull()) {
+        var next = layer.nextDrawable();
+        if (next.isNull()) {
             drawable = null;
             suboptimal = true;
             throw new SurfaceException("No drawable available");
         }
+        next.retain();
+        drawable = next;
     }
 
     @Override
     public void blitFromTexture(CommandEncoderBackend commandEncoder, GpuTextureView textureView) {
-        if (drawable == null || drawable.isNull()) {
-            return;
+        if (drawable == null) {
+            throw new IllegalStateException("No drawable acquired");
         }
+        var source = ((MetalGpuTextureView) textureView).getView();
+        int copyWidth = Math.min(width, textureView.getWidth(0));
+        int copyHeight = Math.min(height, textureView.getHeight(0));
         var cmd = ((MetalCommandEncoder) commandEncoder).commandBuffer();
         var pass = MTLRenderPassDescriptor.renderPassDescriptor();
         var color = pass.colorAttachments().objectAtIndexedSubscript(0);
@@ -119,36 +127,34 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
         color.setStoreAction(MTLStoreAction.MTLStoreActionStore);
         var encoder = cmd.renderCommandEncoderWithDescriptor(pass);
         encoder.setRenderPipelineState(blit);
-        encoder.setFragmentTexture(((MetalGpuTextureView) textureView).getView(), 0);
+        encoder.setFragmentTexture(source, 0);
         encoder.setFragmentSamplerState(sampler, 0);
-        encoder.drawPrimitives(MTLRenderCommandEncoder.MTLPrimitiveTypeTriangle, 0, 3);
+        try (var arena = Arena.ofConfined()) {
+            var region = arena.allocate(16);
+            region.setAtIndex(ObjC.FLOAT, 0, (float) copyWidth / width);
+            region.setAtIndex(ObjC.FLOAT, 1, (float) copyHeight / height);
+            region.setAtIndex(ObjC.FLOAT, 2, (float) copyWidth / textureView.getWidth(0));
+            region.setAtIndex(ObjC.FLOAT, 3, (float) copyHeight / textureView.getHeight(0));
+            encoder.setVertexBytes(region, 16, 0);
+            encoder.drawPrimitives(MTLRenderCommandEncoder.MTLPrimitiveTypeTriangle, 0, 3);
+        }
         encoder.endEncoding();
         cmd.presentDrawable(drawable);
-        drawable = null;
     }
 
     @Override
     public void present() {
-        if (drawable == null || drawable.isNull()) {
-            return;
+        if (drawable != null) {
+            drawable.release();
+            drawable = null;
         }
-        var cmd = device.getQueue().commandBuffer();
-        var pass = MTLRenderPassDescriptor.renderPassDescriptor();
-        var color = pass.colorAttachments().objectAtIndexedSubscript(0);
-        color.setTexture(drawable.texture());
-        color.setLoadAction(MTLLoadAction.MTLLoadActionClear);
-        color.setStoreAction(MTLStoreAction.MTLStoreActionStore);
-        try (var arena = Arena.ofConfined()) {
-            color.setClearColor(MTLClearColor.of(arena, 0, 0, 0, 1));
-        }
-        cmd.renderCommandEncoderWithDescriptor(pass).endEncoding();
-        cmd.presentDrawable(drawable);
-        cmd.commit();
-        drawable = null;
     }
 
     @Override
     public void close() {
+        present();
+        blit.release();
+        sampler.release();
     }
 
     @Override

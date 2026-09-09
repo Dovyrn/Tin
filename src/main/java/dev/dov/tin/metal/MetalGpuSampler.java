@@ -18,6 +18,7 @@ public class MetalGpuSampler extends GpuSampler {
     private final FilterMode magFilter;
     private final int maxAnisotropy;
     private final OptionalDouble maxLod;
+    private boolean closed;
 
     @Override
     public AddressMode getAddressModeU() {
@@ -51,6 +52,9 @@ public class MetalGpuSampler extends GpuSampler {
 
     @Override
     public void close() {
-        sampler.release();
+        if (!closed) {
+            closed = true;
+            sampler.release();
+        }
     }
 }

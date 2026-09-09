@@ -31,6 +31,24 @@ public class MetalGpuBuffer extends GpuBuffer {
 
     @Override
     public GpuBufferSlice.MappedView map(long offset, long length, boolean read, boolean write) {
+        if (closed) {
+            throw new IllegalStateException("Buffer is closed");
+        }
+        if (read && (usage() & USAGE_MAP_READ) == 0) {
+            throw new IllegalStateException("Buffer is not mappable for reading");
+        }
+        if (write && (usage() & USAGE_MAP_WRITE) == 0) {
+            throw new IllegalStateException("Buffer is not mappable for writing");
+        }
+        if (!read && !write) {
+            throw new IllegalArgumentException("Buffer must be mapped for reading or writing");
+        }
+        if (length > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Cannot map more than 2GB");
+        }
+        if (offset + length > size()) {
+            throw new IllegalArgumentException("Mapped range is outside the buffer");
+        }
         var contents = buffer.contents();
         var data = MemoryUtil.memByteBuffer(contents.address() + offset, (int) length);
         return new GpuBufferSlice.MappedView(slice(offset, length), data, () -> {

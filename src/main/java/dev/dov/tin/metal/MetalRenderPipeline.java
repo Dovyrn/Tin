@@ -1,6 +1,9 @@
 package dev.dov.tin.metal;
 
+import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
+import com.mojang.blaze3d.PrimitiveTopology;
+import com.mojang.blaze3d.platform.PolygonMode;
 import com.mojang.blaze3d.pipeline.CompiledRenderPipeline;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.textures.GpuSampler;
@@ -14,13 +17,25 @@ import dev.dov.metalj.pipelines.render.MTLRenderPipelineState;
 import dev.dov.metalj.pipelines.shaders.MTLFunction;
 import dev.dov.metalj.pipelines.vertex.MTLVertexDescriptor;
 import dev.dov.metalj.pipelines.vertex.MTLVertexStepFunction;
+import dev.dov.metalj.resources.MTLResourceOptions;
 import dev.dov.metalj.resources.textures.MTLPixelFormat;
+import dev.dov.metalj.resources.textures.MTLTextureDescriptor;
+import dev.dov.metalj.resources.textures.MTLTextureUsage;
 import java.util.Map;
+import lombok.Getter;
 import org.jspecify.annotations.Nullable;
 
 public class MetalRenderPipeline implements CompiledRenderPipeline {
+    private static final float DEPTH_UNIT = 1.0f / (1 << 23);
+    private final MetalDevice device;
     private final RenderPipeline pipeline;
     private final Translation translation;
+    private final Map<String, GpuFormat> texels;
+    private final long fill;
+    @Getter
+    private final boolean fan;
+    @Getter
+    private final float biasScaleFactor;
     private final MTLDepthStencilState depthState;
     private final long topology;
     private final long cull;
@@ -30,9 +45,15 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
     private final @Nullable MTLRenderPipelineState stateNoDepth;
 
     public MetalRenderPipeline(MetalDevice device, RenderPipeline pipeline, MTLFunction vertex,
-            MTLFunction fragment, Translation translation) {
+            MTLFunction fragment, Translation translation, Map<String, GpuFormat> texels) {
+        this.device = device;
         this.pipeline = pipeline;
         this.translation = translation;
+        this.texels = texels;
+        fan = pipeline.getPrimitiveTopology() == PrimitiveTopology.TRIANGLE_FAN;
+        fill = pipeline.getPolygonMode() == PolygonMode.WIREFRAME
+                ? MTLRenderCommandEncoder.MTLTriangleFillModeLines
+                : MTLRenderCommandEncoder.MTLTriangleFillModeFill;
         var depth = pipeline.getDepthStencilState();
         var depthDescriptor = MTLDepthStencilDescriptor.new_();
         depthDescriptor.setDepthCompareFunction(depth == null
@@ -41,18 +62,21 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
         depthDescriptor.setDepthWriteEnabled(depth != null && depth.writeDepth());
         depthState = device.getDevice().newDepthStencilStateWithDescriptor(depthDescriptor);
         biasScale = depth == null ? 0 : depth.depthBiasScaleFactor();
-        biasConstant = depth == null ? 0 : depth.depthBiasConstant();
+        biasConstant = depth == null ? 0 : depth.depthBiasConstant() * DEPTH_UNIT;
+        biasScaleFactor = biasScale;
         topology = MetalConst.primitiveType(pipeline.getPrimitiveTopology());
         cull = pipeline.isCull()
                 ? MTLRenderCommandEncoder.MTLCullModeBack
                 : MTLRenderCommandEncoder.MTLCullModeNone;
-        if (vertex == null) {
+        if (vertex == null || translation == null) {
             state = null;
             stateNoDepth = null;
             return;
         }
         var descriptor = MTLRenderPipelineDescriptor.new_();
-        descriptor.setLabel(NSString.stringWithUTF8String(pipeline.getLocation().toString()));
+        if (device.isDebuggingEnabled()) {
+            descriptor.setLabel(NSString.stringWithUTF8String(pipeline.getLocation().toString()));
+        }
         descriptor.setVertexFunction(vertex);
         descriptor.setFragmentFunction(fragment);
         descriptor.setInputPrimitiveTopology(MetalConst.topologyClass(pipeline.getPrimitiveTopology()));
@@ -78,13 +102,21 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
         }
         descriptor.setVertexDescriptor(layout(pipeline));
         descriptor.setDepthAttachmentPixelFormat(MTLPixelFormat.MTLPixelFormatDepth32Float);
-        state = device.getDevice().newRenderPipelineStateWithDescriptor(descriptor);
-        if (depth == null) {
-            descriptor.setDepthAttachmentPixelFormat(MTLPixelFormat.MTLPixelFormatInvalid);
-            stateNoDepth = device.getDevice().newRenderPipelineStateWithDescriptor(descriptor);
-        } else {
-            stateNoDepth = null;
+        MTLRenderPipelineState compiled = null;
+        MTLRenderPipelineState compiledNoDepth = null;
+        try {
+            compiled = device.getDevice().newRenderPipelineStateWithDescriptor(descriptor);
+            if (depth == null) {
+                descriptor.setDepthAttachmentPixelFormat(MTLPixelFormat.MTLPixelFormatInvalid);
+                compiledNoDepth = device.getDevice().newRenderPipelineStateWithDescriptor(descriptor);
+            }
+        } catch (IllegalStateException e) {
+            device.message("Couldn't compile pipeline " + pipeline.getLocation() + ": " + e.getMessage());
+            compiled = null;
+            compiledNoDepth = null;
         }
+        state = compiled;
+        stateNoDepth = compiledNoDepth;
     }
 
     private static MTLVertexDescriptor layout(RenderPipeline pipeline) {
@@ -115,9 +147,35 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
         return layout;
     }
 
+    private void bindTexel(MTLRenderCommandEncoder pass, Binding binding, GpuBufferSlice slice) {
+        if (slice == null) {
+            throw new IllegalStateException("missing texel buffer " + binding.name());
+        }
+        var format = texels.get(binding.name());
+        long pixel = format.blockSize();
+        long width = (slice.length()) / pixel;
+        var descriptor = MTLTextureDescriptor.textureBufferDescriptorWithPixelFormat(MetalConst.pixelFormat(format),
+                width, MTLResourceOptions.MTLResourceStorageModeShared, MTLTextureUsage.MTLTextureUsageShaderRead);
+        var view = MetalCommandEncoder.buffer(slice).newTextureWithDescriptor(descriptor, slice.offset(),
+                width * pixel);
+        pass.setVertexTexture(view, binding.index());
+        pass.setFragmentTexture(view, binding.index());
+        device.getEncoder().retire(view::release);
+    }
+
     @Override
     public boolean isValid() {
         return state != null;
+    }
+
+    public void close() {
+        if (state != null) {
+            state.release();
+        }
+        if (stateNoDepth != null) {
+            stateNoDepth.release();
+        }
+        depthState.release();
     }
 
     public long topology() {
@@ -132,7 +190,10 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
         pass.setRenderPipelineState(chosen);
         pass.setDepthStencilState(depthState);
         pass.setCullMode(cull);
-        pass.setDepthBias(biasConstant, biasScale, 0);
+        pass.setTriangleFillMode(fill);
+        if (biasConstant != 0 && biasScale != 0) {
+            pass.setDepthBias(biasConstant, biasScale, 0);
+        }
     }
 
     public void bindResources(MTLRenderCommandEncoder pass, Map<String, GpuBufferSlice> uniforms,
@@ -147,6 +208,10 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
             pass.setFragmentBuffer(buffer, value.offset(), binding.index());
         }
         for (var binding : translation.textures()) {
+            if (binding.texel()) {
+                bindTexel(pass, binding, uniforms.get(binding.name()));
+                continue;
+            }
             var view = views.get(binding.name());
             if (view == null) {
                 throw new IllegalStateException("missing texture " + binding.name());

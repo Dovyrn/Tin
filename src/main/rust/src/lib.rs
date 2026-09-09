@@ -12,6 +12,8 @@ const UNIFORM_BASE: u32 = 16;
 struct Request {
     inputs: Vec<String>,
     texels: Vec<Texel>,
+    uniforms: Vec<String>,
+    samplers: Vec<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -21,6 +23,7 @@ struct Texel {
 }
 
 #[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
 struct Reply {
     error: Option<String>,
     vertex: String,
@@ -41,6 +44,8 @@ struct Binding {
 struct Stages {
     inputs: Vec<String>,
     texels: Vec<Texel>,
+    declared_uniforms: Vec<String>,
+    declared_samplers: Vec<String>,
     outputs: Vec<String>,
     uniforms: Vec<Binding>,
     textures: Vec<Binding>,
@@ -71,6 +76,9 @@ impl Stages {
         }
         for buffer in &buffers {
             let name = buffer.name.to_string();
+            if !self.declared_uniforms.contains(&name) {
+                return Err(format!("shader uses uniform buffer {name} which the pipeline does not declare"));
+            }
             let i = match self.uniforms.iter().position(|u| u.name == name) {
                 Some(i) => i,
                 None => {
@@ -88,6 +96,12 @@ impl Stages {
                 TypeInner::Image(image) => image.dimension,
                 _ => return Err(format!("sampler {name} has no image type")),
             };
+            if !self.declared_samplers.contains(&name) && !self.declared_uniforms.contains(&name) {
+                return Err(format!("shader uses sampler {name} which the pipeline does not declare"));
+            }
+            if !matches!(dim, Dim::Dim2D | Dim::DimCube | Dim::DimBuffer) {
+                return Err(format!("sampler {name} has an unsupported dimension"));
+            }
             let texel = self.texels.iter().any(|t| t.name == name && t.buffer);
             if texel != (dim == Dim::DimBuffer) {
                 return Err(format!("sampler {name} dimension does not match its binding"));
@@ -102,6 +116,9 @@ impl Stages {
             };
             compiler.set_decoration(image.id, Decoration::DescriptorSet, Some(0u32)).map_err(text)?;
             compiler.set_decoration(image.id, Decoration::Binding, Some(self.textures[i].index)).map_err(text)?;
+        }
+        if UNIFORM_BASE as usize + self.uniforms.len() >= 31 {
+            return Err("too many uniform buffers for one Metal stage".to_string());
         }
         let mut options = CompilerOptions::default();
         options.version = MslVersion::from((3, 0));
@@ -123,6 +140,8 @@ fn run(vertex: &[u8], fragment: &[u8], request: Request) -> Result<Reply, String
     let mut stages = Stages {
         inputs: request.inputs,
         texels: request.texels,
+        declared_uniforms: request.uniforms,
+        declared_samplers: request.samplers,
         outputs: Vec::new(),
         uniforms: Vec::new(),
         textures: Vec::new(),

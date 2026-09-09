@@ -108,7 +108,7 @@ public class MetalConst {
 
     public long primitiveType(PrimitiveTopology topology) {
         return switch (topology) {
-            case LINES, DEBUG_LINES -> MTLRenderCommandEncoder.MTLPrimitiveTypeLine;
+            case DEBUG_LINES -> MTLRenderCommandEncoder.MTLPrimitiveTypeLine;
             case DEBUG_LINE_STRIP -> MTLRenderCommandEncoder.MTLPrimitiveTypeLineStrip;
             case POINTS -> MTLRenderCommandEncoder.MTLPrimitiveTypePoint;
             case TRIANGLE_STRIP -> MTLRenderCommandEncoder.MTLPrimitiveTypeTriangleStrip;
@@ -118,7 +118,7 @@ public class MetalConst {
 
     public long topologyClass(PrimitiveTopology topology) {
         return switch (topology) {
-            case LINES, DEBUG_LINES, DEBUG_LINE_STRIP -> MTLPrimitiveTopologyClass.MTLPrimitiveTopologyClassLine;
+            case DEBUG_LINES, DEBUG_LINE_STRIP -> MTLPrimitiveTopologyClass.MTLPrimitiveTopologyClassLine;
             case POINTS -> MTLPrimitiveTopologyClass.MTLPrimitiveTopologyClassPoint;
             default -> MTLPrimitiveTopologyClass.MTLPrimitiveTopologyClassTriangle;
         };

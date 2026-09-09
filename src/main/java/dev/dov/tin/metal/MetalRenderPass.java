@@ -11,6 +11,7 @@ import com.mojang.blaze3d.systems.RenderPassDescriptor;
 import com.mojang.blaze3d.textures.GpuSampler;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import dev.dov.metalj.commands.encoders.MTLRenderCommandEncoder;
+import dev.dov.metalj.resources.buffers.MTLBuffer;
 import dev.dov.metalj.commands.passes.MTLLoadAction;
 import dev.dov.metalj.commands.passes.MTLRenderPassDescriptor;
 import dev.dov.metalj.commands.passes.MTLStoreAction;
@@ -22,6 +23,7 @@ import java.lang.foreign.Arena;
 import java.nio.IntBuffer;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 import org.jspecify.annotations.Nullable;
@@ -41,6 +43,7 @@ public class MetalRenderPass implements RenderPassBackend {
     private GpuBuffer indexBuffer;
     private IndexType indexType;
     private boolean dirty = true;
+    private int groups;
 
     public MetalRenderPass(MetalCommandEncoder encoder, RenderPassDescriptor descriptor) {
         this.encoder = encoder;
@@ -91,7 +94,7 @@ public class MetalRenderPass implements RenderPassBackend {
         try (var arena = Arena.ofConfined()) {
             pass.setViewport(MTLViewport.of(arena, 0, 0, width, height, 0, 1));
         }
-        pass.setFrontFacingWinding(MTLRenderCommandEncoder.MTLWindingCounterClockwise);
+        pass.setFrontFacingWinding(MTLRenderCommandEncoder.MTLWindingClockwise);
         disableScissor();
     }
 
@@ -101,23 +104,34 @@ public class MetalRenderPass implements RenderPassBackend {
 
     @Override
     public void pushDebugGroup(Supplier<String> label) {
+        groups++;
         pass.pushDebugGroup(NSString.stringWithUTF8String(label.get()));
     }
 
     @Override
     public void popDebugGroup() {
+        if (groups == 0) {
+            throw new IllegalStateException("Cannot pop more debug groups than were pushed");
+        }
+        groups--;
         pass.popDebugGroup();
     }
 
     @Override
     public void setPipeline(RenderPipeline pipeline) {
         this.pipeline = encoder.getDevice().compiled(pipeline);
+        if (!this.pipeline.isValid()) {
+            throw new IllegalStateException("Pipeline is not valid (may contain invalid shaders?)");
+        }
         this.pipeline.bind(pass, depth);
         dirty = true;
     }
 
     @Override
     public void bindTexture(String name, @Nullable GpuTextureView textureView, @Nullable GpuSampler sampler) {
+        if (textureView == null != (sampler == null)) {
+            throw new IllegalArgumentException("texture " + name + " needs a view and a sampler together");
+        }
         if (textureView == null) {
             views.remove(name);
             samplers.remove(name);
@@ -152,7 +166,7 @@ public class MetalRenderPass implements RenderPassBackend {
 
     @Override
     public void disableScissor() {
-        if (area != null && area.width() > 0 && area.height() > 0) {
+        if (area != null) {
             enableScissor(area.x(), area.y(), area.width(), area.height());
         } else {
             enableScissor(0, 0, width, height);
@@ -162,9 +176,10 @@ public class MetalRenderPass implements RenderPassBackend {
     @Override
     public void setVertexBuffer(int slot, @Nullable GpuBufferSlice vertexBuffer) {
         if (vertexBuffer == null) {
+            pass.setVertexBuffer(MTLBuffer.of(0), 0, slot);
             return;
         }
-        pass.setVertexBuffer(((MetalGpuBuffer) vertexBuffer.buffer()).getBuffer(), vertexBuffer.offset(), slot);
+        pass.setVertexBuffer(MetalCommandEncoder.buffer(vertexBuffer), vertexBuffer.offset(), slot);
     }
 
     @Override
@@ -174,6 +189,9 @@ public class MetalRenderPass implements RenderPassBackend {
     }
 
     private void bind() {
+        if (pipeline == null || !pipeline.isValid()) {
+            throw new IllegalStateException("Pipeline is missing or not valid");
+        }
         if (!dirty) {
             return;
         }
@@ -184,9 +202,43 @@ public class MetalRenderPass implements RenderPassBackend {
     @Override
     public void drawIndexed(int indexCount, int instanceCount, int firstIndex, int vertexOffset, int firstInstance) {
         bind();
+        if (pipeline.isFan()) {
+            drawFan(indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
+            return;
+        }
         pass.drawIndexedPrimitives(pipeline.topology(), indexCount, MetalConst.indexType(indexType),
-                ((MetalGpuBuffer) indexBuffer).getBuffer(), (long) firstIndex * indexType.bytes, instanceCount,
+                MetalCommandEncoder.buffer(indexBuffer), (long) firstIndex * indexType.bytes, instanceCount,
                 vertexOffset, firstInstance);
+    }
+
+    private void drawFan(int indexCount, int instanceCount, int firstIndex, int vertexOffset, int firstInstance) {
+        if (indexCount < 3) {
+            return;
+        }
+        int triangles = indexCount - 2;
+        var expanded = encoder.transientMemory()
+                .allocateGpuMapped(triangles * 3L * Integer.BYTES, 4, GpuBuffer.USAGE_INDEX);
+        var source = MetalCommandEncoder.buffer(indexBuffer).contents();
+        long base = (long) firstIndex * indexType.bytes;
+        var data = expanded.data();
+        for (int i = 0; i < triangles; i++) {
+            data.putInt(index(source, base, 0));
+            data.putInt(index(source, base, i + 1));
+            data.putInt(index(source, base, i + 2));
+        }
+        data.flip();
+        expanded.close();
+        var slice = expanded.slice();
+        pass.drawIndexedPrimitives(pipeline.topology(), triangles * 3L,
+                MTLRenderCommandEncoder.MTLIndexTypeUInt32, MetalCommandEncoder.buffer(slice), slice.offset(),
+                instanceCount, vertexOffset, firstInstance);
+    }
+
+    private int index(java.lang.foreign.MemorySegment source, long base, int at) {
+        long offset = base + (long) at * indexType.bytes;
+        return indexType == IndexType.SHORT
+                ? Short.toUnsignedInt(source.get(java.lang.foreign.ValueLayout.JAVA_SHORT, offset))
+                : source.get(java.lang.foreign.ValueLayout.JAVA_INT, offset);
     }
 
     @Override
@@ -221,8 +273,36 @@ public class MetalRenderPass implements RenderPassBackend {
 
     @Override
     public void draw(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
+        if (pipeline == null || !pipeline.isValid()) {
+            return;
+        }
         bind();
+        if (pipeline.isFan()) {
+            drawFan(vertexCount, instanceCount, firstVertex, firstInstance);
+            return;
+        }
         pass.drawPrimitives(pipeline.topology(), firstVertex, vertexCount, instanceCount, firstInstance);
+    }
+
+    private void drawFan(int vertexCount, int instanceCount, int firstVertex, int firstInstance) {
+        if (vertexCount < 3) {
+            return;
+        }
+        int triangles = vertexCount - 2;
+        var expanded = encoder.transientMemory()
+                .allocateGpuMapped(triangles * 3L * Integer.BYTES, 4, GpuBuffer.USAGE_INDEX);
+        var data = expanded.data();
+        for (int i = 0; i < triangles; i++) {
+            data.putInt(0);
+            data.putInt(i + 1);
+            data.putInt(i + 2);
+        }
+        data.flip();
+        expanded.close();
+        var slice = expanded.slice();
+        pass.drawIndexedPrimitives(pipeline.topology(), triangles * 3L,
+                MTLRenderCommandEncoder.MTLIndexTypeUInt32, MetalCommandEncoder.buffer(slice), slice.offset(),
+                instanceCount, firstVertex, firstInstance);
     }
 
     @Override
@@ -253,16 +333,25 @@ public class MetalRenderPass implements RenderPassBackend {
     public <T> void drawMultipleIndexed(Collection<RenderPass.Draw<T>> draws, @Nullable GpuBuffer defaultIndexBuffer,
             @Nullable IndexType defaultIndexType, Collection<String> dynamicUniforms, T uniformArgument) {
         for (var draw : draws) {
+            var uploader = draw.uniformUploaderConsumer();
+            if (uploader != null) {
+                uploader.accept(uniformArgument, this::setUniform);
+            }
             var indices = draw.indexBuffer() == null ? defaultIndexBuffer : draw.indexBuffer();
             var type = draw.indexType() == null ? defaultIndexType : draw.indexType();
             setIndexBuffer(indices, type);
-            setVertexBuffer(draw.slot(), draw.vertexBuffer().slice(0, draw.vertexBuffer().size()));
+            setVertexBuffer(draw.slot(), draw.vertexBuffer().slice());
             drawIndexed(draw.indexCount(), 1, draw.firstIndex(), draw.baseVertex(), 0);
         }
     }
 
     @Override
     public void writeTimestamp(GpuQueryPool pool, int index) {
-        ((MetalQueryPool) pool).write(encoder.commandBuffer(), index);
+        var queries = (MetalQueryPool) pool;
+        if (queries.samples() == null) {
+            return;
+        }
+        pass.sampleCountersInBuffer(queries.samples(), index, true);
+        queries.record(index);
     }
 }

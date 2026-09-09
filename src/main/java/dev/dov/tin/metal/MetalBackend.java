@@ -6,6 +6,8 @@ import com.mojang.blaze3d.shaders.ShaderSource;
 import com.mojang.blaze3d.systems.BackendCreationException;
 import com.mojang.blaze3d.systems.GpuBackend;
 import com.mojang.blaze3d.systems.GpuDevice;
+import dev.dov.metalj.device.MTLDevice;
+import dev.dov.metalj.device.Metal;
 import java.util.Locale;
 
 import org.jetbrains.annotations.NotNull;
@@ -29,7 +31,12 @@ public class MetalBackend implements GpuBackend {
     }
 
     @Override
-    public @NotNull GpuDevice createDevice(long window, @NotNull ShaderSource shaders, @NotNull GpuDebugOptions debug, @NotNull Runnable loader) {
-        return new GpuDevice(new MetalDevice(window, shaders, debug), loader);
+    public @NotNull GpuDevice createDevice(long window, @NotNull ShaderSource shaders,
+            @NotNull GpuDebugOptions debug, @NotNull Runnable loader) throws BackendCreationException {
+        var device = Metal.MTLCreateSystemDefaultDevice();
+        if (device.isNull() || !device.supportsFamily(MTLDevice.MTLGPUFamilyMetal3)) {
+            throw new BackendCreationException("Metal 3 is required", BackendCreationException.Reason.OTHER);
+        }
+        return new GpuDevice(new MetalDevice(device, window, shaders, debug), loader);
     }
 }
