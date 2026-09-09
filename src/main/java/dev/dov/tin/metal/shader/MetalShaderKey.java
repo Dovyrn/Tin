@@ -1,4 +1,4 @@
-package dev.dov.tin.metal;
+package dev.dov.tin.metal.shader;
 
 import com.mojang.blaze3d.shaders.ShaderType;
 import net.minecraft.client.renderer.ShaderDefines;

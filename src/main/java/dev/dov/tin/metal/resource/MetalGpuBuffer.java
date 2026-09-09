@@ -1,4 +1,4 @@
-package dev.dov.tin.metal;
+package dev.dov.tin.metal.resource;
 
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;

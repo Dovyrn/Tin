@@ -1,4 +1,4 @@
-package dev.dov.tin.metal;
+package dev.dov.tin.metal.command;
 
 import com.mojang.blaze3d.buffers.GpuFence;
 import lombok.RequiredArgsConstructor;

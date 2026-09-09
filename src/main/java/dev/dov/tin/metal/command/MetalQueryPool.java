@@ -1,14 +1,16 @@
-package dev.dov.tin.metal;
+package dev.dov.tin.metal.command;
 
 import com.mojang.blaze3d.systems.GpuQueryPool;
 import dev.dov.metalj.commands.MTLCommandBuffer;
 import dev.dov.metalj.commands.passes.MTLComputePassDescriptor;
+import dev.dov.metalj.debug.MTLCommonCounter;
 import dev.dov.metalj.debug.MTLCounterResultTimestamp;
 import dev.dov.metalj.debug.MTLCounterSampleBuffer;
 import dev.dov.metalj.debug.MTLCounterSampleBufferDescriptor;
-import dev.dov.metalj.debug.MTLCommonCounter;
 import dev.dov.metalj.debug.MTLCounterSet;
 import dev.dov.metalj.resources.MTLStorageMode;
+import dev.dov.tin.metal.AutoreleasePool;
+import dev.dov.tin.metal.MetalDevice;
 import java.util.Arrays;
 import java.util.OptionalLong;
 import lombok.Getter;

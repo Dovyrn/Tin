@@ -1,4 +1,4 @@
-package dev.dov.tin.metal;
+package dev.dov.tin.metal.shader;
 
 import com.google.gson.Gson;
 import java.lang.foreign.Arena;

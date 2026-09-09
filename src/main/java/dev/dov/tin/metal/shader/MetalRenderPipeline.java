@@ -1,11 +1,11 @@
-package dev.dov.tin.metal;
+package dev.dov.tin.metal.shader;
 
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.PrimitiveTopology;
-import com.mojang.blaze3d.platform.CompareOp;
-import com.mojang.blaze3d.platform.PolygonMode;
 import com.mojang.blaze3d.pipeline.CompiledRenderPipeline;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
+import com.mojang.blaze3d.platform.CompareOp;
+import com.mojang.blaze3d.platform.PolygonMode;
 import dev.dov.metalj.commands.encoders.MTLRenderCommandEncoder;
 import dev.dov.metalj.objc.NSString;
 import dev.dov.metalj.pipelines.depth.MTLDepthStencilDescriptor;
@@ -16,6 +16,8 @@ import dev.dov.metalj.pipelines.shaders.MTLFunction;
 import dev.dov.metalj.pipelines.vertex.MTLVertexDescriptor;
 import dev.dov.metalj.pipelines.vertex.MTLVertexStepFunction;
 import dev.dov.metalj.resources.textures.MTLPixelFormat;
+import dev.dov.tin.metal.MetalConst;
+import dev.dov.tin.metal.MetalDevice;
 import java.util.Map;
 import lombok.Getter;
 import org.jspecify.annotations.Nullable;

@@ -1,4 +1,4 @@
-package dev.dov.tin.metal;
+package dev.dov.tin.metal.shader;
 
 import java.util.List;
 

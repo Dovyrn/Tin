@@ -1,4 +1,4 @@
-package dev.dov.tin.metal;
+package dev.dov.tin.metal.command;
 
 import com.mojang.blaze3d.textures.GpuTexture;
 import dev.dov.metalj.commands.MTLCommandBuffer;
@@ -16,11 +16,16 @@ import dev.dov.metalj.pipelines.render.MTLRenderPipelineDescriptor;
 import dev.dov.metalj.pipelines.render.MTLRenderPipelineState;
 import dev.dov.metalj.pipelines.shaders.MTLCompileOptions;
 import dev.dov.metalj.resources.textures.MTLPixelFormat;
+import dev.dov.tin.metal.AutoreleasePool;
+import dev.dov.tin.metal.MetalConst;
+import dev.dov.tin.metal.MetalDevice;
+import dev.dov.tin.metal.resource.MetalGpuTexture;
+import dev.dov.tin.metal.shader.MetalShaders;
 import java.lang.foreign.Arena;
 import java.util.HashMap;
 import java.util.Map;
-import org.jspecify.annotations.Nullable;
 import org.joml.Vector4fc;
+import org.jspecify.annotations.Nullable;
 
 public class MetalClears {
     private final MetalDevice device;

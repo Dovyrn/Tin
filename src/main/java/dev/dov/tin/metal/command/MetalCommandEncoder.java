@@ -1,4 +1,4 @@
-package dev.dov.tin.metal;
+package dev.dov.tin.metal.command;
 
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
@@ -18,6 +18,13 @@ import dev.dov.metalj.commands.passes.MTLStoreAction;
 import dev.dov.metalj.resources.MTLOrigin;
 import dev.dov.metalj.resources.MTLSize;
 import dev.dov.metalj.resources.buffers.MTLBuffer;
+import dev.dov.tin.metal.AutoreleasePool;
+import dev.dov.tin.metal.MetalDevice;
+import dev.dov.tin.metal.resource.MetalGpuBuffer;
+import dev.dov.tin.metal.resource.MetalGpuTexture;
+import dev.dov.tin.metal.resource.MetalTransientBuffer;
+import dev.dov.tin.metal.resource.MetalTransientMemory;
+import dev.dov.tin.metal.resource.MetalTransientView;
 import java.lang.foreign.Arena;
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
@@ -33,7 +40,7 @@ import org.joml.Vector4f;
 import org.joml.Vector4fc;
 
 public class MetalCommandEncoder implements CommandEncoderBackend {
-    static final int IN_FLIGHT = 2;
+    public static final int IN_FLIGHT = 2;
 
     @Getter
     private final MetalDevice device;

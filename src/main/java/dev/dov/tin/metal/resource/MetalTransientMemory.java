@@ -1,7 +1,9 @@
-package dev.dov.tin.metal;
+package dev.dov.tin.metal.resource;
 
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import com.mojang.blaze3d.systems.TransientMemory;
+import dev.dov.tin.metal.MetalDevice;
+import dev.dov.tin.metal.command.MetalCommandEncoder;
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
