@@ -201,7 +201,7 @@ public class MetalTransientMemory implements TransientMemory {
         offset = BLOCK;
         while (retired.size() > MetalCommandEncoder.IN_FLIGHT) {
             for (var block : retired.removeFirst()) {
-                if (block.size() > BLOCK) {
+                if (block.size() > BLOCK && free.stream().anyMatch(kept -> kept.size() > BLOCK)) {
                     block.getBuffer().release();
                 } else {
                     free.add(block);

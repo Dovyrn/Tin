@@ -10,6 +10,7 @@ import com.mojang.blaze3d.systems.RenderPassDescriptor;
 import com.mojang.blaze3d.systems.TransientMemory;
 import com.mojang.blaze3d.textures.GpuTexture;
 import dev.dov.metalj.commands.MTLCommandBuffer;
+import dev.dov.metalj.commands.encoders.MTLBlitCommandEncoder;
 import dev.dov.metalj.commands.passes.MTLClearColor;
 import dev.dov.metalj.commands.passes.MTLLoadAction;
 import dev.dov.metalj.commands.passes.MTLRenderPassDescriptor;
@@ -47,6 +48,7 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
     @Getter
     private long completed = -1;
     private MTLCommandBuffer cmd;
+    private MTLBlitCommandEncoder blit;
     private MetalRenderPass pass;
 
     public MetalCommandEncoder(MetalDevice device) {
@@ -55,6 +57,13 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
     }
 
     public MTLCommandBuffer commandBuffer() {
+        endBlit();
+        open();
+        flushClears();
+        return cmd;
+    }
+
+    private void open() {
         if (pass != null) {
             throw new IllegalStateException("Cannot start command buffer while inside RenderPass");
         }
@@ -65,8 +74,30 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
                 return created;
             });
         }
-        flushClears();
-        return cmd;
+    }
+
+    private MTLBlitCommandEncoder blit() {
+        open();
+        if (!colorClears.isEmpty() || !depthClears.isEmpty()) {
+            endBlit();
+            flushClears();
+        }
+        if (blit == null) {
+            blit = AutoreleasePool.get(() -> {
+                var created = cmd.blitCommandEncoder();
+                created.retain();
+                return created;
+            });
+        }
+        return blit;
+    }
+
+    private void endBlit() {
+        if (blit != null) {
+            blit.endEncoding();
+            blit.release();
+            blit = null;
+        }
     }
 
     private void flushClears() {
@@ -236,11 +267,7 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
 
     @Override
     public void copyToBuffer(GpuBufferSlice source, GpuBufferSlice target) {
-        AutoreleasePool.run(() -> {
-            var blit = commandBuffer().blitCommandEncoder();
-            blit.copyFromBuffer(buffer(source), source.offset(), buffer(target), target.offset(), source.length());
-            blit.endEncoding();
-        });
+        blit().copyFromBuffer(buffer(source), source.offset(), buffer(target), target.offset(), source.length());
     }
 
     public static MTLBuffer buffer(GpuBufferSlice slice) {
@@ -279,15 +306,10 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
 
     private void copyToTexture(MTLBuffer source, long offset, long row, GpuTexture destination, int mipLevel,
             int layer, int x, int y, int width, int height) {
-        AutoreleasePool.run(() -> {
-            var blit = commandBuffer().blitCommandEncoder();
-            try (var arena = Arena.ofConfined()) {
-                blit.copyFromBuffer(source, offset, row, row * height, MTLSize.of(arena, width, height, 1),
-                        ((MetalGpuTexture) destination).getTexture(), layer, mipLevel,
-                        MTLOrigin.of(arena, x, y, 0));
-            }
-            blit.endEncoding();
-        });
+        try (var arena = Arena.ofConfined()) {
+            blit().copyFromBuffer(source, offset, row, row * height, MTLSize.of(arena, width, height, 1),
+                    ((MetalGpuTexture) destination).getTexture(), layer, mipLevel, MTLOrigin.of(arena, x, y, 0));
+        }
     }
 
     @Override
@@ -301,31 +323,22 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
     public void copyTextureToBuffer(GpuTexture source, GpuBuffer destination, long offset, Runnable callback,
             int mipLevel, int x, int y, int width, int height) {
         long row = (long) width * source.getFormat().blockSize();
-        AutoreleasePool.run(() -> {
-            var blit = commandBuffer().blitCommandEncoder();
-            try (var arena = Arena.ofConfined()) {
-                blit.copyFromTexture(((MetalGpuTexture) source).getTexture(), 0, mipLevel,
-                        MTLOrigin.of(arena, x, y, 0), MTLSize.of(arena, width, height, 1),
-                        ((MetalGpuBuffer) destination).getBuffer(), offset, row, row * height);
-            }
-            blit.endEncoding();
-        });
+        try (var arena = Arena.ofConfined()) {
+            blit().copyFromTexture(((MetalGpuTexture) source).getTexture(), 0, mipLevel,
+                    MTLOrigin.of(arena, x, y, 0), MTLSize.of(arena, width, height, 1),
+                    ((MetalGpuBuffer) destination).getBuffer(), offset, row, row * height);
+        }
         pending.add(callback);
     }
 
     @Override
     public void copyTextureToTexture(GpuTexture source, GpuTexture destination, int mipLevel, int destX, int destY,
             int sourceX, int sourceY, int width, int height) {
-        AutoreleasePool.run(() -> {
-            var blit = commandBuffer().blitCommandEncoder();
-            try (var arena = Arena.ofConfined()) {
-                blit.copyFromTexture(((MetalGpuTexture) source).getTexture(), 0, mipLevel,
-                        MTLOrigin.of(arena, sourceX, sourceY, 0), MTLSize.of(arena, width, height, 1),
-                        ((MetalGpuTexture) destination).getTexture(), 0, mipLevel,
-                        MTLOrigin.of(arena, destX, destY, 0));
-            }
-            blit.endEncoding();
-        });
+        try (var arena = Arena.ofConfined()) {
+            blit().copyFromTexture(((MetalGpuTexture) source).getTexture(), 0, mipLevel,
+                    MTLOrigin.of(arena, sourceX, sourceY, 0), MTLSize.of(arena, width, height, 1),
+                    ((MetalGpuTexture) destination).getTexture(), 0, mipLevel, MTLOrigin.of(arena, destX, destY, 0));
+        }
     }
 
     public void waitIdle() {

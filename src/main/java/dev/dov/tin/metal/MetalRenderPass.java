@@ -42,6 +42,7 @@ public class MetalRenderPass implements RenderPassBackend {
     private final Map<String, GpuTextureView> views = new HashMap<>();
     private final Map<String, GpuSampler> samplers = new HashMap<>();
     private final Map<String, GpuBufferSlice> bound = new HashMap<>();
+    private final GpuBufferSlice[] vertices = new GpuBufferSlice[16];
     private final Set<String> dirtyUniforms = new HashSet<>();
     private final Set<String> dirtyTextures = new HashSet<>();
     private int width;
@@ -201,11 +202,20 @@ public class MetalRenderPass implements RenderPassBackend {
 
     @Override
     public void setVertexBuffer(int slot, @Nullable GpuBufferSlice vertexBuffer) {
+        var previous = vertices[slot];
+        vertices[slot] = vertexBuffer;
         if (vertexBuffer == null) {
             pass.setVertexBuffer(MTLBuffer.of(0), 0, slot);
             return;
         }
-        pass.setVertexBuffer(MetalCommandEncoder.buffer(vertexBuffer), vertexBuffer.offset(), slot);
+        var buffer = MetalCommandEncoder.buffer(vertexBuffer);
+        if (previous != null && MetalCommandEncoder.buffer(previous) == buffer) {
+            if (previous.offset() != vertexBuffer.offset()) {
+                pass.setVertexBufferOffset(vertexBuffer.offset(), slot);
+            }
+            return;
+        }
+        pass.setVertexBuffer(buffer, vertexBuffer.offset(), slot);
     }
 
     @Override
@@ -241,12 +251,12 @@ public class MetalRenderPass implements RenderPassBackend {
             throw new IllegalStateException("missing uniform " + binding.name());
         }
         var previous = bound.put(binding.name(), value);
-        if (previous != null && previous.buffer() == value.buffer()) {
+        var buffer = MetalCommandEncoder.buffer(value);
+        if (previous != null && MetalCommandEncoder.buffer(previous) == buffer) {
             pass.setVertexBufferOffset(value.offset(), binding.index());
             pass.setFragmentBufferOffset(value.offset(), binding.index());
             return;
         }
-        var buffer = MetalCommandEncoder.buffer(value);
         pass.setVertexBuffer(buffer, value.offset(), binding.index());
         pass.setFragmentBuffer(buffer, value.offset(), binding.index());
     }
