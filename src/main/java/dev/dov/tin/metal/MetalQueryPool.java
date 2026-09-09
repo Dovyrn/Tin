@@ -1,6 +1,7 @@
 package dev.dov.tin.metal;
 
 import com.mojang.blaze3d.systems.GpuQueryPool;
+import dev.dov.metalj.commands.MTLCommandBuffer;
 import java.util.OptionalLong;
 import lombok.RequiredArgsConstructor;
 import org.jetbrains.annotations.NotNull;
@@ -27,6 +28,9 @@ public class MetalQueryPool implements GpuQueryPool {
             values[i] = OptionalLong.empty();
         }
         return values;
+    }
+
+    public void write(MTLCommandBuffer cmd, int index) {
     }
 
     @Override

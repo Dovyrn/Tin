@@ -17,7 +17,11 @@ import org.jetbrains.annotations.NotNull;
 import org.jspecify.annotations.Nullable;
 import org.lwjgl.PointerBuffer;
 
+@lombok.RequiredArgsConstructor
 public class MetalRenderPass implements RenderPassBackend {
+    private final MetalCommandEncoder encoder;
+    private final com.mojang.blaze3d.systems.RenderPassDescriptor descriptor;
+
     @Override
     public void pushDebugGroup(@NotNull Supplier<String> label) {
     }
