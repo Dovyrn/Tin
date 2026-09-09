@@ -9,6 +9,7 @@ import com.mojang.blaze3d.systems.RenderPassBackend;
 import com.mojang.blaze3d.systems.RenderPassDescriptor;
 import com.mojang.blaze3d.systems.TransientMemory;
 import com.mojang.blaze3d.textures.GpuTexture;
+import dev.dov.metalj.commands.MTLCommandBuffer;
 import java.nio.ByteBuffer;
 
 import org.jetbrains.annotations.NotNull;
@@ -17,11 +18,23 @@ import org.joml.Vector4fc;
 @lombok.RequiredArgsConstructor
 public class MetalCommandEncoder implements CommandEncoderBackend {
     private final MetalDevice device;
+    private MTLCommandBuffer cmd;
+
+    public MTLCommandBuffer commandBuffer() {
+        if (cmd == null) {
+            cmd = device.getQueue().commandBuffer();
+        }
+        return cmd;
+    }
 
     private final MetalTransientMemory memory = new MetalTransientMemory();
 
     @Override
     public void submit() {
+        if (cmd != null) {
+            cmd.commit();
+            cmd = null;
+        }
     }
 
     @Override
