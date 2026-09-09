@@ -24,18 +24,23 @@ import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.Deque;
-import lombok.RequiredArgsConstructor;
 import org.joml.Vector4fc;
 import org.lwjgl.system.MemoryUtil;
 
-@RequiredArgsConstructor
 public class MetalCommandEncoder implements CommandEncoderBackend {
     private static final int IN_FLIGHT = 2;
 
+    @lombok.Getter
     private final MetalDevice device;
-    private final MetalTransientMemory memory = new MetalTransientMemory();
+    private final MetalTransientMemory memory;
     private final Deque<MTLCommandBuffer> submitted = new ArrayDeque<>();
     private MTLCommandBuffer cmd;
+    private MetalRenderPass pass;
+
+    public MetalCommandEncoder(MetalDevice device) {
+        this.device = device;
+        memory = new MetalTransientMemory(device);
+    }
 
     public MTLCommandBuffer commandBuffer() {
         if (cmd == null) {
@@ -46,6 +51,7 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
 
     @Override
     public void submit() {
+        memory.endSubmit();
         if (cmd != null) {
             cmd.commit();
             submitted.addLast(cmd);
@@ -63,11 +69,16 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
 
     @Override
     public RenderPassBackend createRenderPass(RenderPassDescriptor descriptor) {
-        return new MetalRenderPass(this, descriptor);
+        pass = new MetalRenderPass(this, descriptor);
+        return pass;
     }
 
     @Override
     public void submitRenderPass() {
+        if (pass != null) {
+            pass.end();
+            pass = null;
+        }
     }
 
     @Override

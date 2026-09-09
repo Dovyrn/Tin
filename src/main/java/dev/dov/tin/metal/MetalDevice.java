@@ -5,7 +5,10 @@ import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.pipeline.CompiledRenderPipeline;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.shaders.GpuDebugOptions;
+import com.mojang.blaze3d.preprocessor.GlslPreprocessor;
 import com.mojang.blaze3d.shaders.ShaderSource;
+import com.mojang.blaze3d.shaders.ShaderType;
+import com.mojang.blaze3d.vulkan.glsl.GlslCompiler;
 import com.mojang.blaze3d.systems.CommandEncoderBackend;
 import com.mojang.blaze3d.systems.DeviceFeatures;
 import com.mojang.blaze3d.systems.DeviceInfo;
@@ -24,6 +27,8 @@ import dev.dov.metalj.device.MTLCommandQueue;
 import dev.dov.metalj.device.Metal;
 import dev.dov.metalj.objc.NSString;
 import dev.dov.metalj.objc.ObjC;
+import dev.dov.metalj.pipelines.shaders.MTLCompileOptions;
+import dev.dov.metalj.pipelines.shaders.MTLFunction;
 import dev.dov.metalj.resources.MTLResourceOptions;
 import dev.dov.metalj.resources.MTLStorageMode;
 import dev.dov.metalj.resources.samplers.MTLSamplerDescriptor;
@@ -32,7 +37,9 @@ import dev.dov.metalj.resources.textures.MTLTextureDescriptor;
 import dev.dov.metalj.resources.textures.MTLTextureUsage;
 import java.lang.foreign.Arena;
 import java.nio.ByteBuffer;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.OptionalDouble;
 import java.util.Set;
 import java.util.function.Supplier;
@@ -52,6 +59,8 @@ public class MetalDevice implements GpuDeviceBackend {
     private final dev.dov.metalj.device.MTLDevice device = Metal.MTLCreateSystemDefaultDevice();
     @Getter
     private final MTLCommandQueue queue = device.newCommandQueue();
+    private final Map<RenderPipeline, MetalRenderPipeline> pipelines = new IdentityHashMap<>();
+    private final GlslCompiler compiler = new GlslCompiler();
     private final long window;
     private final ShaderSource shaders;
     private final GpuDebugOptions debug;
@@ -159,15 +168,39 @@ public class MetalDevice implements GpuDeviceBackend {
 
     @Override
     public CompiledRenderPipeline precompilePipeline(RenderPipeline pipeline, @Nullable ShaderSource shaderSource) {
-        return new MetalRenderPipeline(pipeline);
+        return pipelines.computeIfAbsent(pipeline, key -> compile(key, shaderSource == null ? shaders : shaderSource));
+    }
+
+    private MetalRenderPipeline compile(RenderPipeline pipeline, ShaderSource source) {
+        var vertex = function(pipeline, ShaderType.VERTEX, source);
+        var fragment = function(pipeline, ShaderType.FRAGMENT, source);
+        return new MetalRenderPipeline(this, pipeline, vertex, fragment);
+    }
+
+    @lombok.SneakyThrows
+    private MTLFunction function(RenderPipeline pipeline, ShaderType stage, ShaderSource source) {
+        var id = stage == ShaderType.VERTEX ? pipeline.getVertexShader() : pipeline.getFragmentShader();
+        var text = source.get(id, stage);
+        var spirv = compiler.createIntermediary(id.toDebugFileName(),
+                GlslPreprocessor.injectDefines(text, pipeline.getShaderDefines()), stage);
+        var library = device.newLibraryWithSource(
+                NSString.stringWithUTF8String(MetalShaders.translate(spirv.spirv(), stage)),
+                MTLCompileOptions.new_());
+        return library.newFunctionWithName(NSString.stringWithUTF8String(MetalShaders.entryPoint(stage)));
+    }
+
+    public CompiledRenderPipeline compiled(RenderPipeline pipeline) {
+        return precompilePipeline(pipeline, null);
     }
 
     @Override
     public void clearPipelineCache() {
+        pipelines.clear();
     }
 
     @Override
     public void close() {
+        compiler.close();
     }
 
     @Override
