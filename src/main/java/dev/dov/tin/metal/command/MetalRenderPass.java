@@ -29,11 +29,14 @@ import dev.dov.tin.metal.resource.MetalGpuTextureView;
 import dev.dov.tin.metal.shader.Binding;
 import dev.dov.tin.metal.shader.MetalRenderPipeline;
 import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.IntBuffer;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.IntUnaryOperator;
@@ -59,6 +62,7 @@ public class MetalRenderPass implements RenderPassBackend {
     private GpuBuffer indexBuffer;
     private IndexType indexType;
     private int groups;
+    private final List<Runnable> deferred = new ArrayList<>();
 
     public MetalRenderPass(MetalCommandEncoder encoder, RenderPassDescriptor descriptor) {
         this.encoder = encoder;
@@ -130,6 +134,9 @@ public class MetalRenderPass implements RenderPassBackend {
     public void end() {
         pass.endEncoding();
         pass.release();
+        for (var sample : deferred) {
+            sample.run();
+        }
     }
 
     @Override
@@ -292,11 +299,21 @@ public class MetalRenderPass implements RenderPassBackend {
         var format = pipeline.getTexels().get(binding.name());
         long pixel = format.blockSize();
         long width = slice.length() / pixel;
+        long align = encoder.getDevice().texelAlign(format);
+        if (slice.offset() % align != 0) {
+            var copy = encoder.transientMemory()
+                    .allocateGpuMapped(slice.length(), align, GpuBuffer.USAGE_UNIFORM_TEXEL_BUFFER);
+            var source = MetalCommandEncoder.buffer(slice).contents().asSlice(slice.offset(), slice.length());
+            MemorySegment.ofBuffer(copy.data()).copyFrom(source);
+            copy.close();
+            slice = copy.slice();
+        }
+        var aligned = slice;
         var view = AutoreleasePool.get(() -> {
             var descriptor = MTLTextureDescriptor.textureBufferDescriptorWithPixelFormat(
                     MetalConst.pixelFormat(format), width, MTLResourceOptions.MTLResourceStorageModeShared,
                     MTLTextureUsage.MTLTextureUsageShaderRead);
-            return MetalCommandEncoder.buffer(slice).newTextureWithDescriptor(descriptor, slice.offset(),
+            return MetalCommandEncoder.buffer(aligned).newTextureWithDescriptor(descriptor, aligned.offset(),
                     width * pixel);
         });
         pass.setVertexTexture(view, binding.index());
@@ -435,6 +452,10 @@ public class MetalRenderPass implements RenderPassBackend {
     public void writeTimestamp(GpuQueryPool pool, int index) {
         var queries = (MetalQueryPool) pool;
         if (queries.getSamples() == null) {
+            return;
+        }
+        if (!encoder.getDevice().isDrawSampling()) {
+            deferred.add(() -> encoder.writeTimestamp(pool, index));
             return;
         }
         pass.sampleCountersInBuffer(queries.getSamples(), index, true);

@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
+import java.util.concurrent.locks.LockSupport;
 import lombok.Getter;
 import org.joml.Vector4f;
 import org.joml.Vector4fc;
@@ -395,8 +396,12 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
         if (buffer == null) {
             return true;
         }
-        if (timeoutNs == 0 && buffer.status() != MTLCommandBuffer.MTLCommandBufferStatusCompleted) {
-            return false;
+        long deadline = System.nanoTime() + timeoutNs;
+        while (buffer.status() < MTLCommandBuffer.MTLCommandBufferStatusCompleted) {
+            if (timeoutNs == 0 || System.nanoTime() >= deadline) {
+                return false;
+            }
+            LockSupport.parkNanos(20_000);
         }
         while (!batches.isEmpty() && batches.firstKey() <= index) {
             finish(batches.firstKey());

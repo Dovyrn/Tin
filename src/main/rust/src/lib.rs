@@ -6,11 +6,11 @@ use spirv_cross2::{targets, Compiler, Module};
 use std::ffi::{c_char, CStr, CString};
 use std::slice;
 
-const UNIFORM_BASE: u32 = 16;
 
 #[derive(Deserialize)]
 struct Request {
     inputs: Vec<String>,
+    buffers: u32,
     texels: Vec<Texel>,
     uniforms: Vec<String>,
     samplers: Vec<String>,
@@ -43,6 +43,7 @@ struct Binding {
 
 struct Stages {
     inputs: Vec<String>,
+    base: u32,
     texels: Vec<Texel>,
     declared_uniforms: Vec<String>,
     declared_samplers: Vec<String>,
@@ -82,7 +83,7 @@ impl Stages {
             let i = match self.uniforms.iter().position(|u| u.name == name) {
                 Some(i) => i,
                 None => {
-                    let index = UNIFORM_BASE + self.uniforms.len() as u32;
+                    let index = self.base + self.uniforms.len() as u32;
                     self.uniforms.push(Binding { name, index, texel: false });
                     self.uniforms.len() - 1
                 }
@@ -117,7 +118,7 @@ impl Stages {
             compiler.set_decoration(image.id, Decoration::DescriptorSet, Some(0u32)).map_err(text)?;
             compiler.set_decoration(image.id, Decoration::Binding, Some(self.textures[i].index)).map_err(text)?;
         }
-        if UNIFORM_BASE as usize + self.uniforms.len() >= 31 {
+        if self.base as usize + self.uniforms.len() > 31 {
             return Err("too many uniform buffers for one Metal stage".to_string());
         }
         let mut options = CompilerOptions::default();
@@ -139,6 +140,7 @@ fn text<E: std::fmt::Display>(e: E) -> String {
 fn run(vertex: &[u8], fragment: &[u8], request: Request) -> Result<Reply, String> {
     let mut stages = Stages {
         inputs: request.inputs,
+        base: request.buffers,
         texels: request.texels,
         declared_uniforms: request.uniforms,
         declared_samplers: request.samplers,

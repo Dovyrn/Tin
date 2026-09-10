@@ -60,11 +60,19 @@ public class MetalQueryPool implements GpuQueryPool {
         if (samples == null) {
             return;
         }
-        var pass = MTLComputePassDescriptor.computePassDescriptor();
-        var attachment = pass.sampleBufferAttachments().objectAtIndexedSubscript(0);
-        attachment.setSampleBuffer(samples);
-        attachment.setStartOfEncoderSampleIndex(index);
-        cmd.computeCommandEncoderWithDescriptor(pass).endEncoding();
+        if (device.isStageSampling()) {
+            var pass = MTLComputePassDescriptor.computePassDescriptor();
+            var attachment = pass.sampleBufferAttachments().objectAtIndexedSubscript(0);
+            attachment.setSampleBuffer(samples);
+            attachment.setStartOfEncoderSampleIndex(index);
+            cmd.computeCommandEncoderWithDescriptor(pass).endEncoding();
+        } else if (device.isBlitSampling()) {
+            var blit = cmd.blitCommandEncoder();
+            blit.sampleCountersInBuffer(samples, index, true);
+            blit.endEncoding();
+        } else {
+            return;
+        }
         record(index);
     }
 
@@ -82,16 +90,12 @@ public class MetalQueryPool implements GpuQueryPool {
         if (samples == null || written[index] == Long.MIN_VALUE) {
             return OptionalLong.empty();
         }
-        if (device.getEncoder().getCompleted() < written[index]) {
+        if (!device.getEncoder().awaitSubmit(written[index], 0)) {
             return OptionalLong.empty();
         }
         long value = AutoreleasePool.get(
                 () -> MTLCounterResultTimestamp.timestamp(samples.resolveCounterRange(index, 1).bytes(), 0));
-        if (value == -1) {
-            return OptionalLong.empty();
-        }
-        written[index] = Long.MIN_VALUE;
-        return OptionalLong.of(value);
+        return value == -1 ? OptionalLong.empty() : OptionalLong.of(value);
     }
 
     @Override

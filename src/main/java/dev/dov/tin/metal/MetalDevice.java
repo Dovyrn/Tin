@@ -29,6 +29,7 @@ import com.mojang.blaze3d.vulkan.glsl.GlslCompiler;
 import com.mojang.blaze3d.vulkan.glsl.IntermediaryShaderModule;
 import com.mojang.blaze3d.vulkan.glsl.ShaderCompileException;
 import com.mojang.logging.LogUtils;
+import dev.dov.metalj.debug.MTLCounterSamplingPoint;
 import dev.dov.metalj.device.MTLCommandQueue;
 import dev.dov.metalj.device.MTLDevice;
 import dev.dov.metalj.device.Metal;
@@ -98,16 +99,31 @@ public class MetalDevice implements GpuDeviceBackend {
     private MetalCommandEncoder encoder;
     private final List<String> messages = new ArrayList<>();
     private final DeviceInfo info;
+    @Getter
+    private final boolean drawSampling;
+    @Getter
+    private final boolean stageSampling;
+    @Getter
+    private final boolean blitSampling;
     private final ShaderSource shaders;
     private final GpuDebugOptions debug;
 
     public MetalDevice(MTLDevice device, ShaderSource shaders, GpuDebugOptions debug) {
         this.device = device;
         this.queue = device.newCommandQueue();
+        MetalConst.depth24 = device.isDepth24Stencil8PixelFormatSupported();
         this.clears = new MetalClears(this);
         this.shaders = shaders;
         this.debug = debug;
+        this.drawSampling = device.supportsCounterSampling(MTLCounterSamplingPoint.MTLCounterSamplingPointAtDrawBoundary);
+        this.stageSampling = device.supportsCounterSampling(
+                MTLCounterSamplingPoint.MTLCounterSamplingPointAtStageBoundary);
+        this.blitSampling = device.supportsCounterSampling(MTLCounterSamplingPoint.MTLCounterSamplingPointAtBlitBoundary);
         this.info = AutoreleasePool.get(this::info);
+    }
+
+    public long texelAlign(GpuFormat format) {
+        return device.minimumLinearTextureAlignmentForPixelFormat(MetalConst.pixelFormat(format));
     }
 
     public boolean useLabels() {
@@ -283,11 +299,15 @@ public class MetalDevice implements GpuDeviceBackend {
 
     private MetalRenderPipeline compile(RenderPipeline pipeline, ShaderSource source) {
         var inputs = new ArrayList<String>();
-        for (var format : pipeline.getVertexFormatBindings()) {
-            if (format != null) {
-                for (var element : format.getElements()) {
-                    inputs.add(element.name());
-                }
+        int buffers = 0;
+        var bindings = pipeline.getVertexFormatBindings();
+        for (int i = 0; i < bindings.length; i++) {
+            if (bindings[i] == null) {
+                continue;
+            }
+            buffers = i + 1;
+            for (var element : bindings[i].getElements()) {
+                inputs.add(element.name());
             }
         }
         var texels = new ArrayList<Texel>();
@@ -308,7 +328,7 @@ public class MetalDevice implements GpuDeviceBackend {
             return new MetalRenderPipeline(this, pipeline, null, null, null, formats);
         }
         var translation = MetalShaders.translate(vertex.spirv(), fragment.spirv(),
-                new Request(inputs, texels, uniforms, samplers));
+                new Request(inputs, buffers, texels, uniforms, samplers));
         if (translation.error() != null) {
             message("Couldn't compile pipeline " + pipeline.getLocation() + ": " + translation.error());
             return new MetalRenderPipeline(this, pipeline, null, null, translation, formats);
@@ -418,6 +438,26 @@ public class MetalDevice implements GpuDeviceBackend {
         return name.startsWith("Intel") ? "Intel" : "Unknown";
     }
 
+    private float period() {
+        long[] first = timestamps();
+        long until = System.nanoTime() + 2_000_000;
+        while (System.nanoTime() < until) {
+            Thread.onSpinWait();
+        }
+        long[] second = timestamps();
+        long gpu = second[1] - first[1];
+        return gpu <= 0 ? 1 : (float) (second[0] - first[0]) / gpu;
+    }
+
+    private long[] timestamps() {
+        try (var arena = Arena.ofConfined()) {
+            var cpu = arena.allocate(ObjC.LONG);
+            var gpu = arena.allocate(ObjC.LONG);
+            device.sampleTimestamps(cpu, gpu);
+            return new long[] {cpu.get(ObjC.LONG, 0), gpu.get(ObjC.LONG, 0)};
+        }
+    }
+
     @Override
     public long getTimestampNow() {
         try (var arena = Arena.ofConfined()) {
@@ -436,8 +476,8 @@ public class MetalDevice implements GpuDeviceBackend {
     private DeviceInfo info() {
         var limits = new DeviceLimits(MAX_ANISOTROPY, uniformAlign(), MAX_TEXTURE,
                 device.recommendedMaxWorkingSetSize(), 0, MAX_ATTACHMENTS);
-        var features = new DeviceFeatures(true, false, false, true, true, true, true);
-        float period = 1;
+        var features = new DeviceFeatures(true, true, true, true, true, true, true);
+        float period = period();
         var hints = new HintsAndWorkarounds(false, false);
         var name = device.name().UTF8String();
         var type = device.hasUnifiedMemory() ? DeviceType.INTEGRATED : DeviceType.DISCRETE;

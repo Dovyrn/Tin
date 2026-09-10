@@ -34,6 +34,9 @@ public class MetalGpuBuffer extends GpuBuffer {
         if (closed) {
             throw new IllegalStateException("Buffer is closed");
         }
+        if (offset < 0 || length < 0) {
+            throw new IllegalArgumentException("Mapped range is negative");
+        }
         if (read && (usage() & USAGE_MAP_READ) == 0) {
             throw new IllegalStateException("Buffer is not mappable for reading");
         }
