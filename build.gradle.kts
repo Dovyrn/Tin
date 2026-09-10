@@ -8,7 +8,6 @@ val mavenGroup: String by project
 val archivesBaseName: String by project
 val minecraftVersion: String by project
 val loaderVersion: String by project
-val fabricVersion: String by project
 val lombokVersion: String by project
 val metaljVersion: String by project
 
@@ -33,7 +32,6 @@ repositories {
 dependencies {
     "minecraft"("com.mojang:minecraft:$minecraftVersion")
     implementation("net.fabricmc:fabric-loader:$loaderVersion")
-    implementation("net.fabricmc.fabric-api:fabric-api:$fabricVersion")
 
     implementation("com.github.Dovyrn:MetalJ:$metaljVersion")
     include("com.github.Dovyrn:MetalJ:$metaljVersion")
