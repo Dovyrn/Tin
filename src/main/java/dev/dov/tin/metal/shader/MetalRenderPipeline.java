@@ -69,7 +69,9 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
         }
         var descriptor = MTLRenderPipelineDescriptor.new_();
         if (device.useLabels()) {
-            descriptor.setLabel(NSString.stringWithUTF8String(pipeline.getLocation().toString()));
+            var label = NSString.stringWithUTF8String(pipeline.getLocation().toString());
+            descriptor.setLabel(label);
+            label.release();
         }
         descriptor.setVertexFunction(vertex);
         descriptor.setFragmentFunction(fragment);
@@ -94,7 +96,9 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
                 attachment.setAlphaBlendOperation(MetalConst.blendOp(blend.alpha().op()));
             }
         }
-        descriptor.setVertexDescriptor(layout(pipeline));
+        var layout = layout(pipeline);
+        descriptor.setVertexDescriptor(layout);
+        layout.release();
         descriptor.setDepthAttachmentPixelFormat(MTLPixelFormat.MTLPixelFormatDepth32Float);
         MTLRenderPipelineState compiled = null;
         MTLRenderPipelineState compiledNoDepth = null;

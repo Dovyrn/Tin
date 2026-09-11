@@ -18,7 +18,6 @@ import dev.dov.metalj.commands.passes.MTLStoreAction;
 import dev.dov.metalj.resources.MTLOrigin;
 import dev.dov.metalj.resources.MTLSize;
 import dev.dov.metalj.resources.buffers.MTLBuffer;
-import dev.dov.tin.metal.AutoreleasePool;
 import dev.dov.tin.metal.MetalDevice;
 import dev.dov.tin.metal.resource.MetalGpuBuffer;
 import dev.dov.tin.metal.resource.MetalGpuTexture;
@@ -57,6 +56,7 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
     private long completed = -1;
     private MTLCommandBuffer cmd;
     private MTLBlitCommandEncoder blit;
+    @Getter
     private MetalRenderPass pass;
 
     public MetalCommandEncoder(MetalDevice device) {
@@ -76,11 +76,7 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
             throw new IllegalStateException("Cannot start command buffer while inside RenderPass");
         }
         if (cmd == null) {
-            cmd = AutoreleasePool.get(() -> {
-                var created = device.getQueue().commandBuffer();
-                created.retain();
-                return created;
-            });
+            cmd = device.getQueue().commandBuffer();
         }
     }
 
@@ -91,11 +87,7 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
             flushClears();
         }
         if (blit == null) {
-            blit = AutoreleasePool.get(() -> {
-                var created = cmd.blitCommandEncoder();
-                created.retain();
-                return created;
-            });
+            blit = cmd.blitCommandEncoder();
         }
         return blit;
     }
@@ -237,7 +229,7 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
     }
 
     private void clearLevel(GpuTexture color, Vector4fc clearColor, GpuTexture depth, double clearDepth, int level) {
-        AutoreleasePool.run(() -> clearNow(color, clearColor, depth, clearDepth, level));
+        clearNow(color, clearColor, depth, clearDepth, level);
     }
 
     private void clearNow(GpuTexture color, Vector4fc clearColor, GpuTexture depth, double clearDepth, int level) {
@@ -261,7 +253,10 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
             attachment.setStoreAction(MTLStoreAction.MTLStoreActionStore);
             attachment.setClearDepth(clearDepth);
         }
-        commandBuffer().renderCommandEncoderWithDescriptor(pass).endEncoding();
+        var encoder = commandBuffer().renderCommandEncoderWithDescriptor(pass);
+        pass.release();
+        encoder.endEncoding();
+        encoder.release();
     }
 
     private GpuBufferSlice staging(ByteBuffer data) {
@@ -411,6 +406,6 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
 
     @Override
     public void writeTimestamp(GpuQueryPool pool, int index) {
-        AutoreleasePool.run(() -> ((MetalQueryPool) pool).write(commandBuffer(), index));
+        ((MetalQueryPool) pool).write(commandBuffer(), index);
     }
 }

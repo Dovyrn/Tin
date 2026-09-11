@@ -16,7 +16,6 @@ import dev.dov.metalj.pipelines.render.MTLRenderPipelineDescriptor;
 import dev.dov.metalj.pipelines.render.MTLRenderPipelineState;
 import dev.dov.metalj.pipelines.shaders.MTLCompileOptions;
 import dev.dov.metalj.resources.textures.MTLPixelFormat;
-import dev.dov.tin.metal.AutoreleasePool;
 import dev.dov.tin.metal.MetalConst;
 import dev.dov.tin.metal.MetalDevice;
 import dev.dov.tin.metal.resource.MetalGpuTexture;
@@ -54,7 +53,7 @@ public class MetalClears {
 
     public void region(MTLCommandBuffer cmd, @Nullable GpuTexture color, @Nullable Vector4fc clearColor,
             @Nullable GpuTexture depth, double clearDepth, int x, int y, int width, int height) {
-        AutoreleasePool.run(() -> clear(cmd, color, clearColor, depth, clearDepth, x, y, width, height));
+        clear(cmd, color, clearColor, depth, clearDepth, x, y, width, height);
     }
 
     private void clear(MTLCommandBuffer cmd, @Nullable GpuTexture color, @Nullable Vector4fc clearColor,
@@ -75,6 +74,7 @@ public class MetalClears {
             attachment.setStoreAction(MTLStoreAction.MTLStoreActionStore);
         }
         var encoder = cmd.renderCommandEncoderWithDescriptor(pass);
+        pass.release();
         encoder.setRenderPipelineState(pipeline(format, depth != null));
         encoder.setDepthStencilState(depth == null ? colorState : depthState);
         try (var arena = Arena.ofConfined()) {
@@ -90,20 +90,26 @@ public class MetalClears {
             encoder.drawPrimitives(MTLRenderCommandEncoder.MTLPrimitiveTypeTriangle, 0, 3);
         }
         encoder.endEncoding();
+        encoder.release();
     }
 
     private MTLRenderPipelineState pipeline(long format, boolean depth) {
         long key = format * 2 + (depth ? 1 : 0);
-        return pipelines.computeIfAbsent(key, ignored -> AutoreleasePool.get(() -> build(format, depth)));
+        return pipelines.computeIfAbsent(key, ignored -> build(format, depth));
     }
 
     private MTLRenderPipelineState build(long format, boolean depth) {
         var options = MTLCompileOptions.new_();
-        var library = device.getDevice().newLibraryWithSource(
-                NSString.stringWithUTF8String(MetalShaders.source("/tin/clear.metal")), options);
+        var source = NSString.stringWithUTF8String(MetalShaders.source("/tin/clear.metal"));
+        var library = device.getDevice().newLibraryWithSource(source, options);
+        source.release();
         options.release();
-        var vertex = library.newFunctionWithName(NSString.stringWithUTF8String("clear_vertex"));
-        var fragment = library.newFunctionWithName(NSString.stringWithUTF8String("clear_fragment"));
+        var vertexName = NSString.stringWithUTF8String("clear_vertex");
+        var fragmentName = NSString.stringWithUTF8String("clear_fragment");
+        var vertex = library.newFunctionWithName(vertexName);
+        var fragment = library.newFunctionWithName(fragmentName);
+        vertexName.release();
+        fragmentName.release();
         library.release();
         var descriptor = MTLRenderPipelineDescriptor.new_();
         descriptor.setVertexFunction(vertex);

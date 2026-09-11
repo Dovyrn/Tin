@@ -22,7 +22,6 @@ import dev.dov.metalj.resources.MTLResourceOptions;
 import dev.dov.metalj.resources.buffers.MTLBuffer;
 import dev.dov.metalj.resources.textures.MTLTextureDescriptor;
 import dev.dov.metalj.resources.textures.MTLTextureUsage;
-import dev.dov.tin.metal.AutoreleasePool;
 import dev.dov.tin.metal.MetalConst;
 import dev.dov.tin.metal.resource.MetalGpuSampler;
 import dev.dov.tin.metal.resource.MetalGpuTextureView;
@@ -41,11 +40,13 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.IntUnaryOperator;
 import java.util.function.Supplier;
+import lombok.Getter;
 import org.jspecify.annotations.Nullable;
 import org.lwjgl.PointerBuffer;
 
 public class MetalRenderPass implements RenderPassBackend {
     private final MetalCommandEncoder encoder;
+    @Getter
     private final MTLRenderCommandEncoder pass;
     private final Map<String, GpuBufferSlice> uniforms = new HashMap<>();
     private final Map<String, GpuTextureView> views = new HashMap<>();
@@ -67,7 +68,7 @@ public class MetalRenderPass implements RenderPassBackend {
     public MetalRenderPass(MetalCommandEncoder encoder, RenderPassDescriptor descriptor) {
         this.encoder = encoder;
         this.area = descriptor.renderArea;
-        pass = AutoreleasePool.get(() -> open(descriptor));
+        pass = open(descriptor);
         try (var arena = Arena.ofConfined()) {
             pass.setViewport(MTLViewport.of(arena, 0, 0, width, height, 0, 1));
         }
@@ -124,9 +125,11 @@ public class MetalRenderPass implements RenderPassBackend {
         this.width = size;
         this.height = rows;
         var opened = encoder.commandBuffer().renderCommandEncoderWithDescriptor(info);
-        opened.retain();
+        info.release();
         if (encoder.getDevice().useLabels()) {
-            opened.setLabel(NSString.stringWithUTF8String(descriptor.label().get()));
+            var label = NSString.stringWithUTF8String(descriptor.label().get());
+            opened.setLabel(label);
+            label.release();
         }
         return opened;
     }
@@ -142,7 +145,9 @@ public class MetalRenderPass implements RenderPassBackend {
     @Override
     public void pushDebugGroup(Supplier<String> label) {
         groups++;
-        AutoreleasePool.run(() -> pass.pushDebugGroup(NSString.stringWithUTF8String(label.get())));
+        var text = NSString.stringWithUTF8String(label.get());
+        pass.pushDebugGroup(text);
+        text.release();
     }
 
     @Override
@@ -309,13 +314,12 @@ public class MetalRenderPass implements RenderPassBackend {
             slice = copy.slice();
         }
         var aligned = slice;
-        var view = AutoreleasePool.get(() -> {
-            var descriptor = MTLTextureDescriptor.textureBufferDescriptorWithPixelFormat(
-                    MetalConst.pixelFormat(format), width, MTLResourceOptions.MTLResourceStorageModeShared,
-                    MTLTextureUsage.MTLTextureUsageShaderRead);
-            return MetalCommandEncoder.buffer(aligned).newTextureWithDescriptor(descriptor, aligned.offset(),
-                    width * pixel);
-        });
+        var descriptor = MTLTextureDescriptor.textureBufferDescriptorWithPixelFormat(
+                MetalConst.pixelFormat(format), width, MTLResourceOptions.MTLResourceStorageModeShared,
+                MTLTextureUsage.MTLTextureUsageShaderRead);
+        var view = MetalCommandEncoder.buffer(aligned).newTextureWithDescriptor(descriptor, aligned.offset(),
+                width * pixel);
+        descriptor.release();
         pass.setVertexTexture(view, binding.index());
         pass.setFragmentTexture(view, binding.index());
         encoder.retire(view::release);

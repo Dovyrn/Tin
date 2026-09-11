@@ -9,7 +9,6 @@ import dev.dov.metalj.debug.MTLCounterSampleBuffer;
 import dev.dov.metalj.debug.MTLCounterSampleBufferDescriptor;
 import dev.dov.metalj.debug.MTLCounterSet;
 import dev.dov.metalj.resources.MTLStorageMode;
-import dev.dov.tin.metal.AutoreleasePool;
 import dev.dov.tin.metal.MetalDevice;
 import java.util.Arrays;
 import java.util.OptionalLong;
@@ -27,7 +26,7 @@ public class MetalQueryPool implements GpuQueryPool {
         this.device = device;
         this.written = new long[size];
         Arrays.fill(written, Long.MIN_VALUE);
-        samples = AutoreleasePool.get(() -> samples(device, size));
+        samples = samples(device, size);
     }
 
     private static MTLCounterSampleBuffer samples(MetalDevice device, int size) {
@@ -65,11 +64,15 @@ public class MetalQueryPool implements GpuQueryPool {
             var attachment = pass.sampleBufferAttachments().objectAtIndexedSubscript(0);
             attachment.setSampleBuffer(samples);
             attachment.setStartOfEncoderSampleIndex(index);
-            cmd.computeCommandEncoderWithDescriptor(pass).endEncoding();
+            var encoder = cmd.computeCommandEncoderWithDescriptor(pass);
+            pass.release();
+            encoder.endEncoding();
+            encoder.release();
         } else if (device.isBlitSampling()) {
             var blit = cmd.blitCommandEncoder();
             blit.sampleCountersInBuffer(samples, index, true);
             blit.endEncoding();
+            blit.release();
         } else {
             return;
         }
@@ -93,8 +96,9 @@ public class MetalQueryPool implements GpuQueryPool {
         if (!device.getEncoder().awaitSubmit(written[index], 0)) {
             return OptionalLong.empty();
         }
-        long value = AutoreleasePool.get(
-                () -> MTLCounterResultTimestamp.timestamp(samples.resolveCounterRange(index, 1).bytes(), 0));
+        var resolved = samples.resolveCounterRange(index, 1);
+        long value = MTLCounterResultTimestamp.timestamp(resolved.bytes(), 0);
+        resolved.release();
         return value == -1 ? OptionalLong.empty() : OptionalLong.of(value);
     }
 

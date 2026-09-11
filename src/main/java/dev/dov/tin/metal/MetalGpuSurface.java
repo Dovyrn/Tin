@@ -44,29 +44,30 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
     public MetalGpuSurface(MetalDevice device, long window) {
         this.device = device;
         cocoa = NSWindow.of(GLFWNativeCocoa.glfwGetCocoaWindow(window));
-        layer = AutoreleasePool.get(() -> {
-            var created = CAMetalLayer.layer();
-            created.retain();
-            created.setDevice(device.getDevice());
-            created.setPixelFormat(MTLPixelFormat.MTLPixelFormatBGRA8Unorm);
-            created.setFramebufferOnly(true);
-            created.setContentsScale(cocoa.backingScaleFactor());
-            var view = cocoa.contentView();
-            view.setWantsLayer(true);
-            view.setLayer(created);
-            return created;
-        });
-        blit = AutoreleasePool.get(this::blitPipeline);
+        layer = CAMetalLayer.layer();
+        layer.setDevice(device.getDevice());
+        layer.setPixelFormat(MTLPixelFormat.MTLPixelFormatBGRA8Unorm);
+        layer.setFramebufferOnly(true);
+        layer.setContentsScale(cocoa.backingScaleFactor());
+        var view = cocoa.contentView();
+        view.setWantsLayer(true);
+        view.setLayer(layer);
+        blit = blitPipeline();
         sampler = blitSampler();
     }
 
     private MTLRenderPipelineState blitPipeline() {
         var options = MTLCompileOptions.new_();
-        var library = device.getDevice().newLibraryWithSource(
-                NSString.stringWithUTF8String(MetalShaders.source("/tin/blit.metal")), options);
+        var source = NSString.stringWithUTF8String(MetalShaders.source("/tin/blit.metal"));
+        var library = device.getDevice().newLibraryWithSource(source, options);
+        source.release();
         options.release();
-        var vertex = library.newFunctionWithName(NSString.stringWithUTF8String("blit_vertex"));
-        var fragment = library.newFunctionWithName(NSString.stringWithUTF8String("blit_fragment"));
+        var vertexName = NSString.stringWithUTF8String("blit_vertex");
+        var fragmentName = NSString.stringWithUTF8String("blit_fragment");
+        var vertex = library.newFunctionWithName(vertexName);
+        var fragment = library.newFunctionWithName(fragmentName);
+        vertexName.release();
+        fragmentName.release();
         library.release();
         var descriptor = MTLRenderPipelineDescriptor.new_();
         descriptor.setVertexFunction(vertex);
@@ -109,13 +110,7 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
 
     @Override
     public void acquireNextTexture() throws SurfaceException {
-        var next = AutoreleasePool.get(() -> {
-            var acquired = layer.nextDrawable();
-            if (!acquired.isNull()) {
-                acquired.retain();
-            }
-            return acquired;
-        });
+        var next = layer.nextDrawable();
         if (next.isNull()) {
             drawable = null;
             suboptimal = true;
@@ -129,7 +124,7 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
         if (drawable == null) {
             throw new IllegalStateException("No drawable acquired");
         }
-        AutoreleasePool.run(() -> blit(commandEncoder, textureView));
+        blit(commandEncoder, textureView);
     }
 
     private void blit(CommandEncoderBackend commandEncoder, GpuTextureView textureView) {
@@ -143,6 +138,7 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
         color.setLoadAction(MTLLoadAction.MTLLoadActionDontCare);
         color.setStoreAction(MTLStoreAction.MTLStoreActionStore);
         var encoder = cmd.renderCommandEncoderWithDescriptor(pass);
+        pass.release();
         encoder.setRenderPipelineState(blit);
         encoder.setFragmentTexture(source, 0);
         encoder.setFragmentSamplerState(sampler, 0);
@@ -156,6 +152,7 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
             encoder.drawPrimitives(MTLRenderCommandEncoder.MTLPrimitiveTypeTriangle, 0, 3);
         }
         encoder.endEncoding();
+        encoder.release();
         cmd.presentDrawable(drawable);
     }
 

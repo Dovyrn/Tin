@@ -119,7 +119,7 @@ public class MetalDevice implements GpuDeviceBackend {
         this.stageSampling = device.supportsCounterSampling(
                 MTLCounterSamplingPoint.MTLCounterSamplingPointAtStageBoundary);
         this.blitSampling = device.supportsCounterSampling(MTLCounterSamplingPoint.MTLCounterSamplingPointAtBlitBoundary);
-        this.info = AutoreleasePool.get(this::info);
+        this.info = info();
     }
 
     public long texelAlign(GpuFormat format) {
@@ -180,7 +180,7 @@ public class MetalDevice implements GpuDeviceBackend {
     @Override
     public GpuTexture createTexture(@Nullable String label, int usage, GpuFormat format, int width, int height,
             int depthOrLayers, int mipLevels) {
-        return AutoreleasePool.get(() -> texture(label, usage, format, width, height, depthOrLayers, mipLevels));
+        return texture(label, usage, format, width, height, depthOrLayers, mipLevels);
     }
 
     private GpuTexture texture(@Nullable String label, int usage, GpuFormat format, int width, int height,
@@ -205,11 +205,14 @@ public class MetalDevice implements GpuDeviceBackend {
         }
         descriptor.setUsage(flags);
         var texture = device.newTextureWithDescriptor(descriptor);
+        descriptor.release();
         if (texture.isNull()) {
             throw new GpuOutOfMemoryException("Failed to create " + format + " texture of " + width + "x" + height);
         }
         if (debug.useLabels() && label != null) {
-            texture.setLabel(NSString.stringWithUTF8String(label));
+            var text = NSString.stringWithUTF8String(label);
+            texture.setLabel(text);
+            text.release();
         }
         return new MetalGpuTexture(texture, usage, label, format, width, height, depthOrLayers, mipLevels);
     }
@@ -221,7 +224,9 @@ public class MetalDevice implements GpuDeviceBackend {
 
     private void label(Consumer<NSString> target, @Nullable Supplier<String> label) {
         if (debug.useLabels() && label != null) {
-            AutoreleasePool.run(() -> target.accept(NSString.stringWithUTF8String(label.get())));
+            var text = NSString.stringWithUTF8String(label.get());
+            target.accept(text);
+            text.release();
         }
     }
 
@@ -290,7 +295,7 @@ public class MetalDevice implements GpuDeviceBackend {
     @Override
     public CompiledRenderPipeline precompilePipeline(RenderPipeline pipeline, @Nullable ShaderSource shaderSource) {
         return pipelines.computeIfAbsent(pipeline,
-                key -> AutoreleasePool.get(() -> compile(key, shaderSource == null ? shaders : shaderSource)));
+                key -> compile(key, shaderSource == null ? shaders : shaderSource));
     }
 
     public MetalRenderPipeline compiled(RenderPipeline pipeline) {
@@ -379,8 +384,12 @@ public class MetalDevice implements GpuDeviceBackend {
         var options = MTLCompileOptions.new_();
         options.setLanguageVersion(MTLLanguageVersion.MTLLanguageVersion3_0);
         try {
-            var library = device.newLibraryWithSource(NSString.stringWithUTF8String(source), options);
-            var function = library.newFunctionWithName(NSString.stringWithUTF8String(entry));
+            var text = NSString.stringWithUTF8String(source);
+            var name = NSString.stringWithUTF8String(entry);
+            var library = device.newLibraryWithSource(text, options);
+            var function = library.newFunctionWithName(name);
+            text.release();
+            name.release();
             library.release();
             if (function.isNull()) {
                 throw new IllegalStateException("no function " + entry + " in the translated library");
