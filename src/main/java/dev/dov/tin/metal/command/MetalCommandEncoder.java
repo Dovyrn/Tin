@@ -141,7 +141,7 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
         batches.put(submits, buffer);
         cmd = null;
         submits++;
-        while (batches.size() > IN_FLIGHT) {
+        while (batches.size() >= IN_FLIGHT) {
             finish(batches.firstKey());
         }
         while (retired.size() > IN_FLIGHT) {

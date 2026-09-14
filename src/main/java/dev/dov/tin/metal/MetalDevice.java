@@ -162,6 +162,7 @@ public class MetalDevice implements GpuDeviceBackend {
                 : MTLSamplerMipFilter.MTLSamplerMipFilterNearest);
         descriptor.setLodMaxClamp(Math.max(lod, MIP_THRESHOLD));
         descriptor.setMaxAnisotropy(Math.max(maxAnisotropy, 1));
+        descriptor.setSupportArgumentBuffers(true);
         var sampler = device.newSamplerStateWithDescriptor(descriptor);
         descriptor.release();
         if (sampler.isNull()) {
