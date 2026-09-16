@@ -1,17 +1,17 @@
 plugins {
-    id("net.fabricmc.fabric-loom") version "1.17-SNAPSHOT"
+    id("net.fabricmc.fabric-loom")
     id("maven-publish")
 }
 
 val modVersion: String by project
 val mavenGroup: String by project
 val archivesBaseName: String by project
-val minecraftVersion: String by project
+val minecraftVersion = stonecutter.current.version
 val loaderVersion: String by project
 val lombokVersion: String by project
 val metaljVersion: String by project
 
-version = modVersion
+version = "$modVersion+$minecraftVersion"
 group = mavenGroup
 
 base {
@@ -20,6 +20,7 @@ base {
 
 loom {
     runConfigs.named("client") {
+        runDir = rootProject.file("run").relativeTo(projectDir).path
         vmArgs("-Xmx2500m")
     }
 }
@@ -40,33 +41,16 @@ dependencies {
     annotationProcessor("org.projectlombok:lombok:$lombokVersion")
 }
 
-val nativeSrcDir = file("src/main/rust")
-val nativeOutDir = layout.buildDirectory.dir("generated/native")
-
-tasks.register<Exec>("buildNative") {
-    workingDir = nativeSrcDir
-    commandLine("cargo", "build", "--release")
-    inputs.dir(File(nativeSrcDir, "src"))
-    inputs.files(File(nativeSrcDir, "Cargo.toml"))
-    outputs.file(File(nativeSrcDir, "target/release/libtin_shaders.dylib"))
-}
-
-tasks.register<Sync>("stageNative") {
-    dependsOn("buildNative")
-    into(nativeOutDir.map { File(it.asFile, "natives") })
-    from(File(nativeSrcDir, "target/release/libtin_shaders.dylib"))
-}
-
 sourceSets.main {
-    resources.srcDir(nativeOutDir)
+    resources.srcDir(rootProject.layout.buildDirectory.dir("generated/native"))
 }
 
 tasks.matching { it.name == "sourcesJar" }.configureEach {
-    dependsOn("stageNative")
+    dependsOn(":stageNative")
 }
 
 tasks.processResources {
-    dependsOn("stageNative")
+    dependsOn(":stageNative")
     inputs.property("version", project.version)
     inputs.property("minecraft_version", minecraftVersion)
     inputs.property("loader_version", loaderVersion)
@@ -97,7 +81,7 @@ java {
 }
 
 tasks.jar {
-    from("LICENSE.txt") {
+    from(rootProject.file("LICENSE.txt")) {
         rename { "${it}_$archivesBaseName" }
     }
 }
