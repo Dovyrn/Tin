@@ -28,7 +28,12 @@ import dev.dov.tin.metal.shader.MetalShaders;
 import java.lang.foreign.Arena;
 import java.util.Collection;
 import java.util.List;
+//? if >=26.3 {
+/*import org.lwjgl.sdl.SDLProperties;
+import org.lwjgl.sdl.SDLVideo;
+*///?} else {
 import org.lwjgl.glfw.GLFWNativeCocoa;
+//?}
 
 public class MetalGpuSurface implements GpuSurfaceBackend {
     private final MetalDevice device;
@@ -43,7 +48,12 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
 
     public MetalGpuSurface(MetalDevice device, long window) {
         this.device = device;
+        //? if >=26.3 {
+        /*cocoa = NSWindow.of(SDLProperties.SDL_GetPointerProperty(SDLVideo.SDL_GetWindowProperties(window),
+                SDLVideo.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, 0L));
+        *///?} else {
         cocoa = NSWindow.of(GLFWNativeCocoa.glfwGetCocoaWindow(window));
+        //?}
         layer = CAMetalLayer.layer();
         layer.setDevice(device.getDevice());
         layer.setPixelFormat(MTLPixelFormat.MTLPixelFormatBGRA8Unorm);

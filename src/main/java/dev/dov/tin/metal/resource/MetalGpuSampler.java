@@ -9,7 +9,11 @@ import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
 @RequiredArgsConstructor
+//? if >=26.3 {
+/*public class MetalGpuSampler implements GpuSampler {
+*///?} else {
 public class MetalGpuSampler extends GpuSampler {
+//?}
     @Getter
     private final MTLSamplerState sampler;
     private final AddressMode addressModeU;
@@ -57,4 +61,11 @@ public class MetalGpuSampler extends GpuSampler {
             sampler.release();
         }
     }
+
+    //? if >=26.3 {
+    /*@Override
+    public boolean isClosed() {
+        return closed;
+    }
+    *///?}
 }

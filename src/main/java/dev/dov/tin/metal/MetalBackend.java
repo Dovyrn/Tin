@@ -1,5 +1,50 @@
 package dev.dov.tin.metal;
 
+//? if >=26.3 {
+/*import com.mojang.blaze3d.systems.BackendCreationException;
+import com.mojang.blaze3d.systems.GpuBackend;
+import com.mojang.blaze3d.shaders.GpuDebugOptions;
+import com.mojang.blaze3d.systems.GpuDevice;
+import com.mojang.renderpearl.frontend.FrontendGpuDevice;
+import dev.dov.metalj.device.MTLDevice;
+import dev.dov.metalj.device.Metal;
+import org.jetbrains.annotations.NotNull;
+import org.lwjgl.sdl.SDLVideo;
+
+public class MetalBackend implements GpuBackend {
+    @Override
+    public @NotNull String getName() {
+        return "Metal";
+    }
+
+    @Override
+    public void loadLibrary() throws BackendCreationException {
+        var device = Metal.MTLCreateSystemDefaultDevice();
+        if (device.isNull() || !device.supportsFamily(MTLDevice.MTLGPUFamilyMetal3)) {
+            throw new BackendCreationException("Metal 3 is required", BackendCreationException.Reason.OTHER);
+        }
+        device.release();
+    }
+
+    @Override
+    public void unloadLibrary() {
+    }
+
+    @Override
+    public long createWindow(String title, int width, int height, long flags) {
+        return SDLVideo.SDL_CreateWindow(title, width, height, SDLVideo.SDL_WINDOW_METAL | flags);
+    }
+
+    @Override
+    public @NotNull GpuDevice createDevice(@NotNull GpuDebugOptions debug) throws BackendCreationException {
+        var device = Metal.MTLCreateSystemDefaultDevice();
+        if (device.isNull() || !device.supportsFamily(MTLDevice.MTLGPUFamilyMetal3)) {
+            throw new BackendCreationException("Metal 3 is required", BackendCreationException.Reason.OTHER);
+        }
+        return new FrontendGpuDevice(new MetalDevice(device, debug));
+    }
+}
+*///?} else {
 import com.mojang.blaze3d.GLFWErrorCapture;
 import com.mojang.blaze3d.shaders.GpuDebugOptions;
 import com.mojang.blaze3d.shaders.ShaderSource;
@@ -44,3 +89,4 @@ public class MetalBackend implements GpuBackend {
         return new GpuDevice(new MetalDevice(device, shaders, debug), loader);
     }
 }
+//?}

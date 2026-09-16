@@ -1,12 +1,19 @@
 package dev.dov.tin.metal.resource;
 
 import com.mojang.blaze3d.buffers.GpuBuffer;
+//? if >=26.3 {
+/*import com.mojang.renderpearl.backend.common.BaseGpuBuffer;
+*///?}
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import dev.dov.metalj.resources.buffers.MTLBuffer;
 import java.util.function.LongSupplier;
 import lombok.Getter;
 
+//? if >=26.3 {
+/*public class MetalTransientBuffer extends BaseGpuBuffer {
+*///?} else {
 public class MetalTransientBuffer extends GpuBuffer {
+//?}
     @Getter
     private final MTLBuffer buffer;
     private final LongSupplier submits;
