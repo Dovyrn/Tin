@@ -52,24 +52,26 @@ public class MetalClears {
     }
 
     public void region(MTLCommandBuffer cmd, @Nullable GpuTexture color, @Nullable Vector4fc clearColor,
-            @Nullable GpuTexture depth, double clearDepth, int x, int y, int width, int height) {
-        clear(cmd, color, clearColor, depth, clearDepth, x, y, width, height);
+            @Nullable GpuTexture depth, double clearDepth, int x, int y, int width, int height, int level) {
+        clear(cmd, color, clearColor, depth, clearDepth, x, y, width, height, level);
     }
 
     private void clear(MTLCommandBuffer cmd, @Nullable GpuTexture color, @Nullable Vector4fc clearColor,
-            @Nullable GpuTexture depth, double clearDepth, int x, int y, int width, int height) {
+            @Nullable GpuTexture depth, double clearDepth, int x, int y, int width, int height, int level) {
         var pass = MTLRenderPassDescriptor.renderPassDescriptor();
         long format = MTLPixelFormat.MTLPixelFormatInvalid;
         if (color != null) {
             format = MetalConst.pixelFormat(color.getFormat());
             var attachment = pass.colorAttachments().objectAtIndexedSubscript(0);
             attachment.setTexture(((MetalGpuTexture) color).getTexture());
+            attachment.setLevel(level);
             attachment.setLoadAction(MTLLoadAction.MTLLoadActionLoad);
             attachment.setStoreAction(MTLStoreAction.MTLStoreActionStore);
         }
         if (depth != null) {
             var attachment = pass.depthAttachment();
             attachment.setTexture(((MetalGpuTexture) depth).getTexture());
+            attachment.setLevel(level);
             attachment.setLoadAction(MTLLoadAction.MTLLoadActionLoad);
             attachment.setStoreAction(MTLStoreAction.MTLStoreActionStore);
         }

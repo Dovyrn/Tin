@@ -1,6 +1,6 @@
 package dev.dov.tin.metal;
 
-//? if >=26.3 {
+//? if >= 26.3 {
 /*import com.mojang.blaze3d.systems.BackendCreationException;
 import com.mojang.blaze3d.systems.GpuBackend;
 import com.mojang.blaze3d.shaders.GpuDebugOptions;

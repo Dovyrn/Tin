@@ -28,7 +28,10 @@ import dev.dov.tin.metal.shader.MetalShaders;
 import java.lang.foreign.Arena;
 import java.util.Collection;
 import java.util.List;
-//? if >=26.3 {
+//? if >= 26.3 {
+/*import java.util.function.BooleanSupplier;
+*///?}
+//? if >= 26.3 {
 /*import org.lwjgl.sdl.SDLProperties;
 import org.lwjgl.sdl.SDLVideo;
 *///?} else {
@@ -41,14 +44,22 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
     private final CAMetalLayer layer;
     private final MTLRenderPipelineState blit;
     private final MTLSamplerState sampler;
+    //? if >= 26.3 {
+    /*private final BooleanSupplier iconified;
+    *///?}
     private CAMetalDrawable drawable;
     private boolean suboptimal;
     private int width;
     private int height;
 
+    //? if >= 26.3 {
+    /*public MetalGpuSurface(MetalDevice device, long window, BooleanSupplier iconified) {
+        this.iconified = iconified;
+    *///?} else {
     public MetalGpuSurface(MetalDevice device, long window) {
+    //?}
         this.device = device;
-        //? if >=26.3 {
+        //? if >= 26.3 {
         /*cocoa = NSWindow.of(SDLProperties.SDL_GetPointerProperty(SDLVideo.SDL_GetWindowProperties(window),
                 SDLVideo.SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, 0L));
         *///?} else {
@@ -120,6 +131,11 @@ public class MetalGpuSurface implements GpuSurfaceBackend {
 
     @Override
     public void acquireNextTexture() throws SurfaceException {
+        //? if >= 26.3 {
+        /*if (iconified.getAsBoolean()) {
+            throw new SurfaceException("Cannot acquire minimized window");
+        }
+        *///?}
         var next = layer.nextDrawable();
         if (next.isNull()) {
             drawable = null;

@@ -6,9 +6,14 @@ import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.pipeline.BindGroupLayout;
 import com.mojang.blaze3d.pipeline.CompiledRenderPipeline;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
-import com.mojang.blaze3d.preprocessor.GlslPreprocessor;
 import com.mojang.blaze3d.shaders.GpuDebugOptions;
+//? if >= 26.3 {
+/*import com.mojang.renderpearl.backend.api.BackendRenderPipeline;
+import com.mojang.renderpearl.backend.api.SpvModule;
+import java.util.function.BooleanSupplier;
+*///?} else {
 import com.mojang.blaze3d.shaders.ShaderSource;
+//?}
 import com.mojang.blaze3d.shaders.ShaderType;
 import com.mojang.blaze3d.shaders.UniformType;
 import com.mojang.blaze3d.systems.CommandEncoderBackend;
@@ -25,8 +30,11 @@ import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.textures.GpuSampler;
 import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.GpuTextureView;
+//? if < 26.3 {
+import com.mojang.blaze3d.preprocessor.GlslPreprocessor;
 import com.mojang.blaze3d.vulkan.glsl.GlslCompiler;
 import com.mojang.blaze3d.vulkan.glsl.IntermediaryShaderModule;
+//?}
 import com.mojang.blaze3d.vulkan.glsl.ShaderCompileException;
 import com.mojang.logging.LogUtils;
 import dev.dov.metalj.debug.MTLCounterSamplingPoint;
@@ -55,7 +63,9 @@ import dev.dov.tin.metal.resource.MetalGpuTexture;
 import dev.dov.tin.metal.resource.MetalGpuTextureView;
 import dev.dov.tin.metal.resource.MetalTransientBuffer;
 import dev.dov.tin.metal.shader.MetalRenderPipeline;
+//? if < 26.3 {
 import dev.dov.tin.metal.shader.MetalShaderKey;
+//?}
 import dev.dov.tin.metal.shader.MetalShaders;
 import dev.dov.tin.metal.shader.Request;
 import dev.dov.tin.metal.shader.Texel;
@@ -91,9 +101,11 @@ public class MetalDevice implements GpuDeviceBackend {
     private final MTLDevice device;
     @Getter
     private final MTLCommandQueue queue;
+    //? if < 26.3 {
     private final Map<RenderPipeline, MetalRenderPipeline> pipelines = new IdentityHashMap<>();
     private final Map<MetalShaderKey, IntermediaryShaderModule> modules = new HashMap<>();
     private final GlslCompiler compiler = new GlslCompiler();
+    //?}
     @Getter
     private final MetalClears clears;
     private MetalCommandEncoder encoder;
@@ -105,15 +117,23 @@ public class MetalDevice implements GpuDeviceBackend {
     private final boolean stageSampling;
     @Getter
     private final boolean blitSampling;
+    //? if < 26.3 {
     private final ShaderSource shaders;
+    //?}
     private final GpuDebugOptions debug;
 
+    //? if >= 26.3 {
+    /*public MetalDevice(MTLDevice device, GpuDebugOptions debug) {
+    *///?} else {
     public MetalDevice(MTLDevice device, ShaderSource shaders, GpuDebugOptions debug) {
+    //?}
         this.device = device;
         this.queue = device.newCommandQueue();
         MetalConst.depth24 = device.isDepth24Stencil8PixelFormatSupported();
         this.clears = new MetalClears(this);
+        //? if < 26.3 {
         this.shaders = shaders;
+        //?}
         this.debug = debug;
         this.drawSampling = device.supportsCounterSampling(MTLCounterSamplingPoint.MTLCounterSamplingPointAtDrawBoundary);
         this.stageSampling = device.supportsCounterSampling(
@@ -130,10 +150,17 @@ public class MetalDevice implements GpuDeviceBackend {
         return debug.useLabels();
     }
 
+    //? if >= 26.3 {
+    /*@Override
+    public GpuSurfaceBackend createSurface(long window, BooleanSupplier iconified) {
+        return new MetalGpuSurface(this, window, iconified);
+    }
+    *///?} else {
     @Override
     public GpuSurfaceBackend createSurface(long window) {
         return new MetalGpuSurface(this, window);
     }
+    //?}
 
     public MetalCommandEncoder getEncoder() {
         createCommandEncoder();
@@ -171,7 +198,6 @@ public class MetalDevice implements GpuDeviceBackend {
         return new MetalGpuSampler(sampler, addressModeU, addressModeV, minFilter, magFilter, maxAnisotropy, maxLod);
     }
 
-    @Override
     public GpuTexture createTexture(@Nullable Supplier<String> label, int usage, GpuFormat format, int width,
             int height, int depthOrLayers, int mipLevels) {
         return createTexture(label == null || !debug.useLabels() ? null : label.get(), usage, format, width, height,
@@ -231,7 +257,6 @@ public class MetalDevice implements GpuDeviceBackend {
         }
     }
 
-    @Override
     public GpuTextureView createTextureView(GpuTexture texture) {
         return createTextureView(texture, 0, texture.getMipLevels());
     }
@@ -293,6 +318,83 @@ public class MetalDevice implements GpuDeviceBackend {
         return debug.useValidationLayers();
     }
 
+//? if >= 26.3 {
+    /*@Override
+    public BackendRenderPipeline.Pending compilePipeline(BackendRenderPipeline.CreateInfo info) {
+        var pipeline = compile(info);
+        return () -> pipeline;
+    }
+
+    private MetalRenderPipeline compile(BackendRenderPipeline.CreateInfo info) {
+        SpvModule vertexModule = null;
+        SpvModule fragmentModule = null;
+        for (var shader : info.shaders()) {
+            if (shader.module().type() == ShaderType.VERTEX) {
+                vertexModule = shader.module();
+            } else if (shader.module().type() == ShaderType.FRAGMENT) {
+                fragmentModule = shader.module();
+            }
+        }
+        var texels = new ArrayList<Texel>();
+        var formats = new HashMap<String, GpuFormat>();
+        var uniforms = new ArrayList<String>();
+        var samplers = new ArrayList<String>();
+        for (var uniform : info.uniforms()) {
+            if (uniform.type() == UniformType.COMBINED_IMAGE_SAMPLER) {
+                samplers.add(uniform.name());
+                continue;
+            }
+            uniforms.add(uniform.name());
+            if (uniform.type() == UniformType.TEXEL_BUFFER) {
+                texels.add(new Texel(uniform.name(), true));
+                formats.put(uniform.name(), uniform.gpuFormat());
+            }
+        }
+        if (vertexModule == null || fragmentModule == null) {
+            message("Couldn't compile pipeline " + info.name() + ": missing a shader stage");
+            return new MetalRenderPipeline(this, info, null, null, null, formats);
+        }
+        int buffers = 0;
+        for (var buffer : info.vertexBuffers()) {
+            buffers = Math.max(buffers, buffer.bufferSlot() + 1);
+        }
+        List<String> inputs;
+        try {
+            inputs = inputs(vertexModule);
+        } catch (ShaderCompileException e) {
+            message("Couldn't compile pipeline " + info.name() + ": " + e.getMessage());
+            return new MetalRenderPipeline(this, info, null, null, null, formats);
+        }
+        var translation = MetalShaders.translate(vertexModule.spv(), fragmentModule.spv(),
+                new Request(inputs, buffers, texels, uniforms, samplers, info.pushConstantsSize()));
+        if (translation.error() != null) {
+            message("Couldn't compile pipeline " + info.name() + ": " + translation.error());
+            return new MetalRenderPipeline(this, info, null, null, translation, formats);
+        }
+        try {
+            var vertexFunction = function(translation.vertex(), translation.vertexEntry());
+            var fragmentFunction = function(translation.fragment(), translation.fragmentEntry());
+            var compiled = new MetalRenderPipeline(this, info, vertexFunction, fragmentFunction, translation, formats);
+            vertexFunction.release();
+            fragmentFunction.release();
+            return compiled;
+        } catch (IllegalStateException e) {
+            message("Couldn't compile pipeline " + info.name() + ": " + e.getMessage());
+            return new MetalRenderPipeline(this, info, null, null, translation, formats);
+        }
+    }
+
+    private static List<String> inputs(SpvModule module) throws ShaderCompileException {
+        var inputs = new ArrayList<String>();
+        for (var input : module.reflect().inputs()) {
+            while (inputs.size() <= input.location()) {
+                inputs.add("");
+            }
+            inputs.set(input.location(), input.name());
+        }
+        return inputs;
+    }
+*///?} else {
     @Override
     public CompiledRenderPipeline precompilePipeline(RenderPipeline pipeline, @Nullable ShaderSource shaderSource) {
         return pipelines.computeIfAbsent(pipeline,
@@ -334,7 +436,7 @@ public class MetalDevice implements GpuDeviceBackend {
             return new MetalRenderPipeline(this, pipeline, null, null, null, formats);
         }
         var translation = MetalShaders.translate(vertex.spirv(), fragment.spirv(),
-                new Request(inputs, buffers, texels, uniforms, samplers));
+                new Request(inputs, buffers, texels, uniforms, samplers, 0));
         if (translation.error() != null) {
             message("Couldn't compile pipeline " + pipeline.getLocation() + ": " + translation.error());
             return new MetalRenderPipeline(this, pipeline, null, null, translation, formats);
@@ -381,6 +483,8 @@ public class MetalDevice implements GpuDeviceBackend {
         }
     }
 
+//?}
+
     private MTLFunction function(String source, String entry) {
         var options = MTLCompileOptions.new_();
         options.setLanguageVersion(MTLLanguageVersion.MTLLanguageVersion3_0);
@@ -401,6 +505,7 @@ public class MetalDevice implements GpuDeviceBackend {
         }
     }
 
+    //? if < 26.3 {
     @Override
     public void clearPipelineCache() {
         if (encoder != null) {
@@ -417,7 +522,18 @@ public class MetalDevice implements GpuDeviceBackend {
         }
         modules.clear();
     }
+    //?}
 
+    //? if >= 26.3 {
+    /*@Override
+    public void close() {
+        if (encoder != null) {
+            encoder.close();
+        }
+        clears.close();
+        queue.release();
+    }
+    *///?} else {
     @Override
     public void close() {
         if (encoder != null) {
@@ -428,6 +544,7 @@ public class MetalDevice implements GpuDeviceBackend {
         queue.release();
         compiler.close();
     }
+    //?}
 
     @Override
     public GpuQueryPool createTimestampQueryPool(int size) {
@@ -468,6 +585,17 @@ public class MetalDevice implements GpuDeviceBackend {
         }
     }
 
+    //? if >= 26.3 {
+    /*@Override
+    public long getTimestampCalibrationOffset() {
+        try (var arena = Arena.ofConfined()) {
+            var cpu = arena.allocate(ObjC.LONG);
+            var gpu = arena.allocate(ObjC.LONG);
+            device.sampleTimestamps(cpu, gpu);
+            return cpu.get(ObjC.LONG, 0) - gpu.get(ObjC.LONG, 0);
+        }
+    }
+    *///?} else {
     @Override
     public long getTimestampNow() {
         try (var arena = Arena.ofConfined()) {
@@ -477,21 +605,36 @@ public class MetalDevice implements GpuDeviceBackend {
             return gpu.get(ObjC.LONG, 0);
         }
     }
+    //?}
 
     @Override
     public DeviceInfo getDeviceInfo() {
         return info;
     }
 
-    private DeviceInfo info() {
+    //? if >= 26.3 {
+    /*private DeviceInfo info() {
         var limits = new DeviceLimits(MAX_ANISOTROPY, uniformAlign(), MAX_TEXTURE,
-                device.recommendedMaxWorkingSetSize(), 0, MAX_ATTACHMENTS);
-        var features = new DeviceFeatures(true, true, true, true, true, true, true);
+                device.recommendedMaxWorkingSetSize(), 0, MAX_ATTACHMENTS, Integer.MAX_VALUE);
+        var features = new DeviceFeatures(true, true, true, true, true, true, true, true);
+        var hints = new HintsAndWorkarounds(false, false, false, false);
         float period = period();
-        var hints = new HintsAndWorkarounds(false, false);
         var name = device.name().UTF8String();
         var type = device.hasUnifiedMemory() ? DeviceType.INTEGRATED : DeviceType.DISCRETE;
         return new DeviceInfo(name, vendor(name), "Metal", true, "Metal", period, limits, features, Set.of(), hints,
                 type);
     }
+    *///?} else {
+    private DeviceInfo info() {
+        var limits = new DeviceLimits(MAX_ANISOTROPY, uniformAlign(), MAX_TEXTURE,
+                device.recommendedMaxWorkingSetSize(), 0, MAX_ATTACHMENTS);
+        var features = new DeviceFeatures(true, true, true, true, true, true, true);
+        var hints = new HintsAndWorkarounds(false, false);
+        float period = period();
+        var name = device.name().UTF8String();
+        var type = device.hasUnifiedMemory() ? DeviceType.INTEGRATED : DeviceType.DISCRETE;
+        return new DeviceInfo(name, vendor(name), "Metal", true, "Metal", period, limits, features, Set.of(), hints,
+                type);
+    }
+    //?}
 }

@@ -1,11 +1,17 @@
 package dev.dov.tin.metal.shader;
 
 import com.mojang.blaze3d.GpuFormat;
-import com.mojang.blaze3d.PrimitiveTopology;
-import com.mojang.blaze3d.pipeline.CompiledRenderPipeline;
-import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.platform.CompareOp;
 import com.mojang.blaze3d.platform.PolygonMode;
+import com.mojang.blaze3d.PrimitiveTopology;
+//? if >= 26.3 {
+/*import com.mojang.blaze3d.pipeline.BindGroupLayout;
+import com.mojang.renderpearl.backend.api.BackendRenderPipeline;
+*///?} else {
+import com.mojang.blaze3d.pipeline.CompiledRenderPipeline;
+import com.mojang.blaze3d.pipeline.RenderPipeline;
+import java.util.Arrays;
+//?}
 import dev.dov.metalj.commands.encoders.MTLRenderCommandEncoder;
 import dev.dov.metalj.objc.NSString;
 import dev.dov.metalj.pipelines.depth.MTLDepthStencilDescriptor;
@@ -18,16 +24,24 @@ import dev.dov.metalj.pipelines.vertex.MTLVertexStepFunction;
 import dev.dov.metalj.resources.textures.MTLPixelFormat;
 import dev.dov.tin.metal.MetalConst;
 import dev.dov.tin.metal.MetalDevice;
+import java.util.List;
 import java.util.Map;
 import lombok.Getter;
 import org.jspecify.annotations.Nullable;
 
+//? if >= 26.3 {
+/*public class MetalRenderPipeline implements BackendRenderPipeline {
+*///?} else {
 public class MetalRenderPipeline implements CompiledRenderPipeline {
+//?}
     private final MetalDevice device;
     @Getter
     private final Translation translation;
     @Getter
     private final Map<String, GpuFormat> texels;
+    //? if >= 26.3 {
+    /*private final List<String> uniformNames;
+    *///?}
     private final long fill;
     @Getter
     private final boolean fan;
@@ -38,17 +52,36 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
     private final float biasConstant;
     private final @Nullable MTLRenderPipelineState state;
     private final @Nullable MTLRenderPipelineState noDepth;
+    @Getter
+    private boolean closed;
 
+    //? if >= 26.3 {
+    /*public MetalRenderPipeline(MetalDevice device, BackendRenderPipeline.CreateInfo pipeline, MTLFunction vertex,
+            MTLFunction fragment, Translation translation, Map<String, GpuFormat> texels) {
+        uniformNames = pipeline.uniforms().stream().map(BindGroupLayout.UniformDescription::name).toList();
+        var shape = pipeline.primitiveTopology();
+        var mode = pipeline.polygonMode();
+        var depth = pipeline.depthStencilState();
+        boolean culling = pipeline.cull();
+        var name = pipeline.name();
+        var targets = pipeline.colorTargetStates();
+    *///?} else {
     public MetalRenderPipeline(MetalDevice device, RenderPipeline pipeline, MTLFunction vertex,
             MTLFunction fragment, Translation translation, Map<String, GpuFormat> texels) {
+        var shape = pipeline.getPrimitiveTopology();
+        var mode = pipeline.getPolygonMode();
+        var depth = pipeline.getDepthStencilState();
+        boolean culling = pipeline.isCull();
+        var name = pipeline.getLocation().toString();
+        var targets = Arrays.asList(pipeline.getColorTargetStates());
+    //?}
         this.device = device;
         this.translation = translation;
         this.texels = texels;
-        fan = pipeline.getPrimitiveTopology() == PrimitiveTopology.TRIANGLE_FAN;
-        fill = pipeline.getPolygonMode() == PolygonMode.WIREFRAME
+        fan = shape == PrimitiveTopology.TRIANGLE_FAN;
+        fill = mode == PolygonMode.WIREFRAME
                 ? MTLRenderCommandEncoder.MTLTriangleFillModeLines
                 : MTLRenderCommandEncoder.MTLTriangleFillModeFill;
-        var depth = pipeline.getDepthStencilState();
         var depthDescriptor = MTLDepthStencilDescriptor.new_();
         depthDescriptor.setDepthCompareFunction(depth == null
                 ? MetalConst.compareFunction(CompareOp.ALWAYS_PASS)
@@ -58,8 +91,8 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
         depthDescriptor.release();
         biasScale = depth == null ? 0 : depth.depthBiasScaleFactor();
         biasConstant = depth == null ? 0 : depth.depthBiasConstant();
-        topology = MetalConst.primitiveType(pipeline.getPrimitiveTopology());
-        cull = pipeline.isCull()
+        topology = MetalConst.primitiveType(shape);
+        cull = culling
                 ? MTLRenderCommandEncoder.MTLCullModeBack
                 : MTLRenderCommandEncoder.MTLCullModeNone;
         if (vertex == null || translation == null) {
@@ -69,16 +102,15 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
         }
         var descriptor = MTLRenderPipelineDescriptor.new_();
         if (device.useLabels()) {
-            var label = NSString.stringWithUTF8String(pipeline.getLocation().toString());
+            var label = NSString.stringWithUTF8String(name);
             descriptor.setLabel(label);
             label.release();
         }
         descriptor.setVertexFunction(vertex);
         descriptor.setFragmentFunction(fragment);
-        descriptor.setInputPrimitiveTopology(MetalConst.topologyClass(pipeline.getPrimitiveTopology()));
-        var targets = pipeline.getColorTargetStates();
-        for (int i = 0; i < targets.length; i++) {
-            var target = targets[i];
+        descriptor.setInputPrimitiveTopology(MetalConst.topologyClass(shape));
+        for (int i = 0; i < targets.size(); i++) {
+            var target = targets.get(i);
             if (target == null) {
                 continue;
             }
@@ -109,7 +141,7 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
                 compiledNoDepth = device.getDevice().newRenderPipelineStateWithDescriptor(descriptor);
             }
         } catch (IllegalStateException e) {
-            device.message("Couldn't compile pipeline " + pipeline.getLocation() + ": " + e.getMessage());
+            device.message("Couldn't compile pipeline " + name + ": " + e.getMessage());
             compiled = null;
             compiledNoDepth = null;
         }
@@ -118,6 +150,36 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
         noDepth = compiledNoDepth;
     }
 
+    //? if >= 26.3 {
+    /*public String uniformName(int index) {
+        return uniformNames.get(index);
+    }
+
+    public int uniformCount() {
+        return uniformNames.size();
+    }
+
+    private static MTLVertexDescriptor layout(BackendRenderPipeline.CreateInfo pipeline) {
+        var layout = MTLVertexDescriptor.vertexDescriptor();
+        for (var buffer : pipeline.vertexBuffers()) {
+            var target = layout.layouts().objectAtIndexedSubscript(buffer.bufferSlot());
+            target.setStride(buffer.stride());
+            if (buffer.stepRate() > 0) {
+                target.setStepFunction(MTLVertexStepFunction.MTLVertexStepFunctionPerInstance);
+                target.setStepRate(buffer.stepRate());
+            } else {
+                target.setStepFunction(MTLVertexStepFunction.MTLVertexStepFunctionPerVertex);
+            }
+        }
+        for (var binding : pipeline.attribBindings()) {
+            var attribute = layout.attributes().objectAtIndexedSubscript(binding.location());
+            attribute.setFormat(MetalConst.vertexFormat(binding.format()));
+            attribute.setOffset(binding.offset());
+            attribute.setBufferIndex(binding.bufferSlot());
+        }
+        return layout;
+    }
+    *///?} else {
     private static MTLVertexDescriptor layout(RenderPipeline pipeline) {
         var layout = MTLVertexDescriptor.vertexDescriptor();
         var bindings = pipeline.getVertexFormatBindings();
@@ -145,13 +207,14 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
         }
         return layout;
     }
+    //?}
 
-    @Override
     public boolean isValid() {
         return state != null;
     }
 
     public void close() {
+        closed = true;
         if (state != null) {
             state.release();
         }

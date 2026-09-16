@@ -3,7 +3,13 @@ package dev.dov.tin.metal.command;
 import com.mojang.blaze3d.IndexType;
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
+//? if >= 26.3 {
+/*import com.mojang.renderpearl.backend.api.BackendRenderPipeline;
+import com.mojang.renderpearl.util.TextureViewAndSampler;
+import java.nio.ByteBuffer;
+*///?} else {
 import com.mojang.blaze3d.pipeline.RenderPipeline;
+//?}
 import com.mojang.blaze3d.systems.GpuQueryPool;
 import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderPassBackend;
@@ -63,11 +69,19 @@ public class MetalRenderPass implements RenderPassBackend {
     private GpuBuffer indexBuffer;
     private IndexType indexType;
     private int groups;
+    //? if >= 26.3 {
+    /*private GpuBufferSlice pushConstants;
+    private boolean pushConstantsDirty;
+    *///?}
     private final List<Runnable> deferred = new ArrayList<>();
 
     public MetalRenderPass(MetalCommandEncoder encoder, RenderPassDescriptor descriptor) {
         this.encoder = encoder;
+        //? if >= 26.3 {
+        /*this.area = descriptor.renderArea();
+        *///?} else {
         this.area = descriptor.renderArea;
+        //?}
         pass = open(descriptor);
         try (var arena = Arena.ofConfined()) {
             pass.setViewport(MTLViewport.of(arena, 0, 0, width, height, 0, 1));
@@ -80,8 +94,8 @@ public class MetalRenderPass implements RenderPassBackend {
         var info = MTLRenderPassDescriptor.renderPassDescriptor();
         int size = 0;
         int rows = 0;
-        for (int i = 0; i < descriptor.colorAttachments.size(); i++) {
-            var color = descriptor.colorAttachments.get(i);
+        for (int i = 0; i < descriptor.colorAttachments().size(); i++) {
+            var color = descriptor.colorAttachments().get(i);
             if (color == null) {
                 continue;
             }
@@ -102,16 +116,16 @@ public class MetalRenderPass implements RenderPassBackend {
                 }
             }
         }
-        this.depth = descriptor.depthAttachment != null;
+        this.depth = descriptor.depthAttachment() != null;
         if (depth) {
-            var view = descriptor.depthAttachment.textureView();
+            var view = descriptor.depthAttachment().textureView();
             size = view.getWidth(0);
             rows = view.getHeight(0);
             var attachment = info.depthAttachment();
             attachment.setTexture(((MetalGpuTextureView) view).getView());
             attachment.setStoreAction(MTLStoreAction.MTLStoreActionStore);
             var pending = view.baseMipLevel() == 0 ? encoder.takeDepthClear(view.texture()) : null;
-            var clear = descriptor.depthAttachment.clearValue();
+            var clear = descriptor.depthAttachment().clearValue();
             if (clear.isPresent()) {
                 attachment.setLoadAction(MTLLoadAction.MTLLoadActionClear);
                 attachment.setClearDepth(clear.getAsDouble());
@@ -159,6 +173,20 @@ public class MetalRenderPass implements RenderPassBackend {
         pass.popDebugGroup();
     }
 
+    //? if >= 26.3 {
+    /*@Override
+    public void setPipeline(BackendRenderPipeline pipeline) {
+        this.pipeline = (MetalRenderPipeline) pipeline;
+        pushConstantsDirty = true;
+        if (!this.pipeline.isValid()) {
+            throw new IllegalStateException("Pipeline is not valid (may contain invalid shaders?)");
+        }
+        this.pipeline.bind(pass, depth);
+        bound.clear();
+        dirtyUniforms.addAll(uniforms.keySet());
+        dirtyTextures.addAll(views.keySet());
+    }
+    *///?} else {
     @Override
     public void setPipeline(RenderPipeline pipeline) {
         this.pipeline = encoder.getDevice().compiled(pipeline);
@@ -170,8 +198,8 @@ public class MetalRenderPass implements RenderPassBackend {
         dirtyUniforms.addAll(uniforms.keySet());
         dirtyTextures.addAll(views.keySet());
     }
+    //?}
 
-    @Override
     public void bindTexture(String name, @Nullable GpuTextureView textureView, @Nullable GpuSampler sampler) {
         if (textureView == null != (sampler == null)) {
             throw new IllegalArgumentException("texture " + name + " needs a view and a sampler together");
@@ -186,17 +214,42 @@ public class MetalRenderPass implements RenderPassBackend {
         dirtyTextures.add(name);
     }
 
-    @Override
     public void setUniform(String name, GpuBuffer value) {
         setUniform(name, value.slice(0, value.size()));
     }
 
-    @Override
     public void setUniform(String name, GpuBufferSlice value) {
         if (!value.equals(uniforms.put(name, value))) {
             dirtyUniforms.add(name);
         }
     }
+
+    //? if >= 26.3 {
+    /*@Override
+    public void setUniform(int index, @Nullable Object value) {
+        var name = pipeline.uniformName(index);
+        switch (value) {
+            case null -> {
+                uniforms.remove(name);
+                views.remove(name);
+                samplers.remove(name);
+                dirtyUniforms.add(name);
+                dirtyTextures.add(name);
+            }
+            case GpuBufferSlice slice -> setUniform(name, slice);
+            case GpuBuffer buffer -> setUniform(name, buffer);
+            case TextureViewAndSampler pair -> bindTexture(name, pair.view(), pair.sampler());
+            default -> throw new IllegalArgumentException("unsupported uniform value for " + name);
+        }
+    }
+
+    @Override
+    public void pushConstants(ByteBuffer value) {
+        pushConstants = encoder.transientMemory().uploadGpu(value,
+                encoder.getDevice().getDeviceInfo().limits().minUniformOffsetAlignment(), GpuBuffer.USAGE_UNIFORM);
+        pushConstantsDirty = true;
+    }
+    *///?}
 
     @Override
     public void enableScissor(int x, int y, int width, int height) {
@@ -246,6 +299,17 @@ public class MetalRenderPass implements RenderPassBackend {
         if (pipeline == null || !pipeline.isValid()) {
             throw new IllegalStateException("Pipeline is missing or not valid");
         }
+        //? if >= 26.3 {
+        /*if (pushConstantsDirty) {
+            pushConstantsDirty = false;
+            var constants = pipeline.getTranslation().pushConstant();
+            if (constants != null && pushConstants != null) {
+                var buffer = MetalCommandEncoder.buffer(pushConstants);
+                pass.setVertexBuffer(buffer, pushConstants.offset(), constants.index());
+                pass.setFragmentBuffer(buffer, pushConstants.offset(), constants.index());
+            }
+        }
+        *///?}
         if (dirtyUniforms.isEmpty() && dirtyTextures.isEmpty()) {
             return;
         }
@@ -436,6 +500,7 @@ public class MetalRenderPass implements RenderPassBackend {
         }
     }
 
+//? if < 26.3 {
     @Override
     public <T> void drawMultipleIndexed(Collection<RenderPass.Draw<T>> draws, @Nullable GpuBuffer defaultIndexBuffer,
             @Nullable IndexType defaultIndexType, Collection<String> dynamicUniforms, T uniformArgument) {
@@ -451,6 +516,8 @@ public class MetalRenderPass implements RenderPassBackend {
             drawIndexed(draw.indexCount(), 1, draw.firstIndex(), draw.baseVertex(), 0);
         }
     }
+
+//?}
 
     @Override
     public void writeTimestamp(GpuQueryPool pool, int index) {

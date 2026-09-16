@@ -8,13 +8,13 @@ import java.util.OptionalDouble;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
+@Getter
 @RequiredArgsConstructor
-//? if >=26.3 {
+//? if >= 26.3 {
 /*public class MetalGpuSampler implements GpuSampler {
 *///?} else {
 public class MetalGpuSampler extends GpuSampler {
 //?}
-    @Getter
     private final MTLSamplerState sampler;
     private final AddressMode addressModeU;
     private final AddressMode addressModeV;
@@ -25,47 +25,10 @@ public class MetalGpuSampler extends GpuSampler {
     private boolean closed;
 
     @Override
-    public AddressMode getAddressModeU() {
-        return addressModeU;
-    }
-
-    @Override
-    public AddressMode getAddressModeV() {
-        return addressModeV;
-    }
-
-    @Override
-    public FilterMode getMinFilter() {
-        return minFilter;
-    }
-
-    @Override
-    public FilterMode getMagFilter() {
-        return magFilter;
-    }
-
-    @Override
-    public int getMaxAnisotropy() {
-        return maxAnisotropy;
-    }
-
-    @Override
-    public OptionalDouble getMaxLod() {
-        return maxLod;
-    }
-
-    @Override
     public void close() {
         if (!closed) {
             closed = true;
             sampler.release();
         }
     }
-
-    //? if >=26.3 {
-    /*@Override
-    public boolean isClosed() {
-        return closed;
-    }
-    *///?}
 }

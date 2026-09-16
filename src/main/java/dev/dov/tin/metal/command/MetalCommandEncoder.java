@@ -193,6 +193,24 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
         clear(colorTexture, clearColor, depthTexture, clearDepth);
     }
 
+    //? if >= 26.3 {
+    /*@Override
+    public void clearColorAndDepthTextures(GpuTexture colorTexture, Vector4fc clearColor, GpuTexture depthTexture,
+            double clearDepth, int regionX, int regionY, int regionWidth, int regionHeight, int mipLevel) {
+        boolean whole = regionX == 0 && regionY == 0 && regionWidth == colorTexture.getWidth(mipLevel)
+                && regionHeight == colorTexture.getHeight(mipLevel);
+        if (whole && mipLevel == 0) {
+            clear(colorTexture, clearColor, depthTexture, clearDepth);
+            return;
+        }
+        if (whole) {
+            clearNow(colorTexture, clearColor, depthTexture, clearDepth, mipLevel);
+            return;
+        }
+        device.getClears().region(commandBuffer(), colorTexture, clearColor, depthTexture, clearDepth, regionX,
+                regionY, regionWidth, regionHeight, mipLevel);
+    }
+    *///?} else {
     @Override
     public void clearColorAndDepthTextures(GpuTexture colorTexture, Vector4fc clearColor, GpuTexture depthTexture,
             double clearDepth, int regionX, int regionY, int regionWidth, int regionHeight) {
@@ -203,8 +221,9 @@ public class MetalCommandEncoder implements CommandEncoderBackend {
             return;
         }
         device.getClears().region(commandBuffer(), colorTexture, clearColor, depthTexture, clearDepth, regionX,
-                regionY, regionWidth, regionHeight);
+                regionY, regionWidth, regionHeight, 0);
     }
+    //?}
 
     @Override
     public void clearDepthTexture(GpuTexture depthTexture, double clearDepth) {

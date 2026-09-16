@@ -1,6 +1,6 @@
 package dev.dov.tin.metal.resource;
 
-//? if >=26.3 {
+//? if >= 26.3 {
 /*import com.mojang.renderpearl.backend.common.BaseGpuBuffer;
 *///?} else {
 import com.mojang.blaze3d.buffers.GpuBuffer;
@@ -10,23 +10,19 @@ import dev.dov.metalj.resources.buffers.MTLBuffer;
 import lombok.Getter;
 import org.lwjgl.system.MemoryUtil;
 
-//? if >=26.3 {
+//? if >= 26.3 {
 /*public class MetalGpuBuffer extends BaseGpuBuffer {
 *///?} else {
 public class MetalGpuBuffer extends GpuBuffer {
 //?}
     @Getter
     private final MTLBuffer buffer;
+    @Getter
     private boolean closed;
 
     public MetalGpuBuffer(MTLBuffer buffer, int usage, long size) {
         super(usage, size);
         this.buffer = buffer;
-    }
-
-    @Override
-    public boolean isClosed() {
-        return closed;
     }
 
     @Override

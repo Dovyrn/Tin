@@ -1,13 +1,13 @@
 package dev.dov.tin.metal.resource;
 
-//? if >=26.3 {
+//? if >= 26.3 {
 /*import com.mojang.renderpearl.backend.common.BaseGpuBuffer;
 *///?} else {
 import com.mojang.blaze3d.buffers.GpuBuffer;
 //?}
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
 
-//? if >=26.3 {
+//? if >= 26.3 {
 /*public class MetalTransientView extends BaseGpuBuffer {
 *///?} else {
 public class MetalTransientView extends GpuBuffer {

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use spirv_cross2::compile::msl::{CompilerOptions, MetalPlatform, MslVersion};
+use spirv_cross2::compile::msl::{BindTarget, CompilerOptions, MetalPlatform, MslVersion, ResourceBinding};
 use spirv_cross2::reflect::{ResourceType, TypeInner};
 use spirv_cross2::spirv::{Decoration, Dim, ExecutionModel};
 use spirv_cross2::{targets, Compiler, Module};
@@ -8,12 +8,14 @@ use std::slice;
 
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Request {
     inputs: Vec<String>,
     buffers: u32,
     texels: Vec<Texel>,
     uniforms: Vec<String>,
     samplers: Vec<String>,
+    push_constants: u32,
 }
 
 #[derive(Deserialize, Clone)]
@@ -32,6 +34,7 @@ struct Reply {
     fragment_entry: String,
     uniforms: Vec<Binding>,
     textures: Vec<Binding>,
+    push_constant: Option<Binding>,
 }
 
 #[derive(Serialize, Clone)]
@@ -43,13 +46,15 @@ struct Binding {
 
 struct Stages {
     inputs: Vec<String>,
-    base: u32,
+    next: u32,
     texels: Vec<Texel>,
     declared_uniforms: Vec<String>,
     declared_samplers: Vec<String>,
+    declared_push_constants: u32,
     outputs: Vec<String>,
     uniforms: Vec<Binding>,
     textures: Vec<Binding>,
+    push_constant: Option<Binding>,
 }
 
 impl Stages {
@@ -83,7 +88,8 @@ impl Stages {
             let i = match self.uniforms.iter().position(|u| u.name == name) {
                 Some(i) => i,
                 None => {
-                    let index = self.base + self.uniforms.len() as u32;
+                    let index = self.next;
+                    self.next += 1;
                     self.uniforms.push(Binding { name, index, texel: false });
                     self.uniforms.len() - 1
                 }
@@ -118,7 +124,28 @@ impl Stages {
             compiler.set_decoration(image.id, Decoration::DescriptorSet, Some(0u32)).map_err(text)?;
             compiler.set_decoration(image.id, Decoration::Binding, Some(self.textures[i].index)).map_err(text)?;
         }
-        if self.base as usize + self.uniforms.len() > 31 {
+        let push: Vec<_> = resources.resources_for_type(ResourceType::PushConstant).map_err(text)?.collect();
+        if !push.is_empty() {
+            if self.declared_push_constants == 0 {
+                return Err("shader uses push constants which the pipeline does not declare".to_string());
+            }
+            let index = match &self.push_constant {
+                Some(binding) => binding.index,
+                None => {
+                    let index = self.next;
+                    self.next += 1;
+                    self.push_constant = Some(Binding {
+                        name: "_push_constants".to_string(),
+                        index,
+                        texel: false,
+                    });
+                    index
+                }
+            };
+            let target = BindTarget { buffer: index, texture: 0, sampler: 0, count: None };
+            compiler.add_resource_binding(model, ResourceBinding::PushConstantBuffer, &target).map_err(text)?;
+        }
+        if self.next > 31 {
             return Err("too many uniform buffers for one Metal stage".to_string());
         }
         let mut options = CompilerOptions::default();
@@ -140,13 +167,15 @@ fn text<E: std::fmt::Display>(e: E) -> String {
 fn run(vertex: &[u8], fragment: &[u8], request: Request) -> Result<Reply, String> {
     let mut stages = Stages {
         inputs: request.inputs,
-        base: request.buffers,
+        next: request.buffers,
         texels: request.texels,
         declared_uniforms: request.uniforms,
         declared_samplers: request.samplers,
+        declared_push_constants: request.push_constants,
         outputs: Vec::new(),
         uniforms: Vec::new(),
         textures: Vec::new(),
+        push_constant: None,
     };
     let (vertex_source, vertex_entry) = stages.stage(vertex, ExecutionModel::Vertex)?;
     let (fragment_source, fragment_entry) = stages.stage(fragment, ExecutionModel::Fragment)?;
@@ -158,6 +187,7 @@ fn run(vertex: &[u8], fragment: &[u8], request: Request) -> Result<Reply, String
         fragment_entry,
         uniforms: stages.uniforms,
         textures: stages.textures,
+        push_constant: stages.push_constant,
     })
 }
 
