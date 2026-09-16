@@ -1,6 +1,7 @@
 plugins {
     id("net.fabricmc.fabric-loom")
     id("maven-publish")
+    id("com.modrinth.minotaur") version "2.9.0"
 }
 
 val modVersion: String by project
@@ -10,6 +11,7 @@ val minecraftVersion = stonecutter.current.version
 val loaderVersion: String by project
 val lombokVersion: String by project
 val metaljVersion: String by project
+val modrinthId: String by project
 
 version = "$modVersion+$minecraftVersion"
 group = mavenGroup
@@ -84,6 +86,15 @@ tasks.jar {
     from(rootProject.file("LICENSE.txt")) {
         rename { "${it}_$archivesBaseName" }
     }
+}
+
+modrinth {
+    projectId = modrinthId
+    versionNumber = project.version.toString()
+    versionType = "release"
+    uploadFile.set(tasks.jar)
+    gameVersions = listOf(minecraftVersion)
+    loaders = listOf("fabric")
 }
 
 publishing {
