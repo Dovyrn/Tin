@@ -71,10 +71,6 @@ public class MetalBackend implements GpuBackend {
 
     @Override
     public void handleWindowCreationErrors(GLFWErrorCapture.@NotNull Error error) throws BackendCreationException {
-        if (error == null) {
-            throw new BackendCreationException("Failed to create window for Metal",
-                    BackendCreationException.Reason.OTHER);
-        }
         throw new BackendCreationException(String.format(Locale.ROOT, "GLFW_ERROR: 0x%X", error.error()),
                 BackendCreationException.Reason.GLFW_ERROR);
     }

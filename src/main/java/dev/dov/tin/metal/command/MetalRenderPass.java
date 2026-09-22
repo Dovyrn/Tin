@@ -511,6 +511,9 @@ public class MetalRenderPass implements RenderPassBackend {
             }
             var indices = draw.indexBuffer() == null ? defaultIndexBuffer : draw.indexBuffer();
             var type = draw.indexType() == null ? defaultIndexType : draw.indexType();
+            if (indices == null || type == null) {
+                throw new IllegalStateException("draw has no index buffer and no default was given");
+            }
             setIndexBuffer(indices, type);
             setVertexBuffer(draw.slot(), draw.vertexBuffer().slice());
             drawIndexed(draw.indexCount(), 1, draw.firstIndex(), draw.baseVertex(), 0);
