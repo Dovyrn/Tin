@@ -6,12 +6,13 @@ import com.mojang.blaze3d.systems.GpuBackend;
 import com.mojang.blaze3d.shaders.GpuDebugOptions;
 import com.mojang.blaze3d.systems.GpuDevice;
 import com.mojang.renderpearl.frontend.FrontendGpuDevice;
-import dev.dov.metalj.device.MTLDevice;
 import dev.dov.metalj.device.Metal;
 import org.jetbrains.annotations.NotNull;
 import org.lwjgl.sdl.SDLVideo;
 
 public class MetalBackend implements GpuBackend {
+    private static final long METAL4 = 5002;
+
     @Override
     public @NotNull String getName() {
         return "Metal";
@@ -20,8 +21,8 @@ public class MetalBackend implements GpuBackend {
     @Override
     public void loadLibrary() throws BackendCreationException {
         var device = Metal.MTLCreateSystemDefaultDevice();
-        if (device.isNull() || !device.supportsFamily(MTLDevice.MTLGPUFamilyMetal3)) {
-            throw new BackendCreationException("Metal 3 is required", BackendCreationException.Reason.OTHER);
+        if (device.isNull() || !device.supportsFamily(METAL4)) {
+            throw new BackendCreationException("Metal 4 is required", BackendCreationException.Reason.OTHER);
         }
         device.release();
     }
@@ -38,8 +39,8 @@ public class MetalBackend implements GpuBackend {
     @Override
     public @NotNull GpuDevice createDevice(@NotNull GpuDebugOptions debug) throws BackendCreationException {
         var device = Metal.MTLCreateSystemDefaultDevice();
-        if (device.isNull() || !device.supportsFamily(MTLDevice.MTLGPUFamilyMetal3)) {
-            throw new BackendCreationException("Metal 3 is required", BackendCreationException.Reason.OTHER);
+        if (device.isNull() || !device.supportsFamily(METAL4)) {
+            throw new BackendCreationException("Metal 4 is required", BackendCreationException.Reason.OTHER);
         }
         return new FrontendGpuDevice(new MetalDevice(device, debug));
     }
@@ -51,7 +52,6 @@ import com.mojang.blaze3d.shaders.ShaderSource;
 import com.mojang.blaze3d.systems.BackendCreationException;
 import com.mojang.blaze3d.systems.GpuBackend;
 import com.mojang.blaze3d.systems.GpuDevice;
-import dev.dov.metalj.device.MTLDevice;
 import dev.dov.metalj.device.Metal;
 import java.util.Locale;
 
@@ -59,6 +59,8 @@ import org.jetbrains.annotations.NotNull;
 import org.lwjgl.glfw.GLFW;
 
 public class MetalBackend implements GpuBackend {
+    private static final long METAL4 = 5002;
+
     @Override
     public @NotNull String getName() {
         return "Metal";
@@ -79,8 +81,8 @@ public class MetalBackend implements GpuBackend {
     public @NotNull GpuDevice createDevice(long window, @NotNull ShaderSource shaders,
             @NotNull GpuDebugOptions debug, @NotNull Runnable loader) throws BackendCreationException {
         var device = Metal.MTLCreateSystemDefaultDevice();
-        if (device.isNull() || !device.supportsFamily(MTLDevice.MTLGPUFamilyMetal3)) {
-            throw new BackendCreationException("Metal 3 is required", BackendCreationException.Reason.OTHER);
+        if (device.isNull() || !device.supportsFamily(METAL4)) {
+            throw new BackendCreationException("Metal 4 is required", BackendCreationException.Reason.OTHER);
         }
         return new GpuDevice(new MetalDevice(device, shaders, debug), loader);
     }

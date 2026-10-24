@@ -13,15 +13,16 @@ import com.mojang.blaze3d.pipeline.RenderPipeline;
 import java.util.Arrays;
 //?}
 import dev.dov.metalj.commands.encoders.MTLRenderCommandEncoder;
+import dev.dov.metalj.metal4.compiler.MTL4LibraryFunctionDescriptor;
+import dev.dov.metalj.metal4.encoders.MTL4RenderCommandEncoder;
+import dev.dov.metalj.metal4.pipelines.MTL4BlendState;
+import dev.dov.metalj.metal4.pipelines.MTL4RenderPipelineDescriptor;
 import dev.dov.metalj.objc.NSString;
 import dev.dov.metalj.pipelines.depth.MTLDepthStencilDescriptor;
 import dev.dov.metalj.pipelines.depth.MTLDepthStencilState;
-import dev.dov.metalj.pipelines.render.MTLRenderPipelineDescriptor;
 import dev.dov.metalj.pipelines.render.MTLRenderPipelineState;
-import dev.dov.metalj.pipelines.shaders.MTLFunction;
 import dev.dov.metalj.pipelines.vertex.MTLVertexDescriptor;
 import dev.dov.metalj.pipelines.vertex.MTLVertexStepFunction;
-import dev.dov.metalj.resources.textures.MTLPixelFormat;
 import dev.dov.tin.metal.MetalConst;
 import dev.dov.tin.metal.MetalDevice;
 import java.util.List;
@@ -51,13 +52,13 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
     private final float biasScale;
     private final float biasConstant;
     private final @Nullable MTLRenderPipelineState state;
-    private final @Nullable MTLRenderPipelineState noDepth;
     @Getter
     private boolean closed;
 
     //? if >= 26.3 {
-    /*public MetalRenderPipeline(MetalDevice device, BackendRenderPipeline.CreateInfo pipeline, MTLFunction vertex,
-            MTLFunction fragment, Translation translation, Map<String, GpuFormat> texels) {
+    /*public MetalRenderPipeline(MetalDevice device, BackendRenderPipeline.CreateInfo pipeline,
+            MTL4LibraryFunctionDescriptor vertex, MTL4LibraryFunctionDescriptor fragment, Translation translation,
+            Map<String, GpuFormat> texels) {
         uniformNames = pipeline.uniforms().stream().map(BindGroupLayout.UniformDescription::name).toList();
         var shape = pipeline.primitiveTopology();
         var mode = pipeline.polygonMode();
@@ -66,8 +67,8 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
         var name = pipeline.name();
         var targets = pipeline.colorTargetStates();
     *///?} else {
-    public MetalRenderPipeline(MetalDevice device, RenderPipeline pipeline, MTLFunction vertex,
-            MTLFunction fragment, Translation translation, Map<String, GpuFormat> texels) {
+    public MetalRenderPipeline(MetalDevice device, RenderPipeline pipeline, MTL4LibraryFunctionDescriptor vertex,
+            MTL4LibraryFunctionDescriptor fragment, Translation translation, Map<String, GpuFormat> texels) {
         var shape = pipeline.getPrimitiveTopology();
         var mode = pipeline.getPolygonMode();
         var depth = pipeline.getDepthStencilState();
@@ -97,17 +98,16 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
                 : MTLRenderCommandEncoder.MTLCullModeNone;
         if (vertex == null || translation == null) {
             state = null;
-            noDepth = null;
             return;
         }
-        var descriptor = MTLRenderPipelineDescriptor.new_();
+        var descriptor = MTL4RenderPipelineDescriptor.new_();
         if (device.useLabels()) {
             var label = NSString.stringWithUTF8String(name);
             descriptor.setLabel(label);
             label.release();
         }
-        descriptor.setVertexFunction(vertex);
-        descriptor.setFragmentFunction(fragment);
+        descriptor.setVertexFunctionDescriptor(vertex);
+        descriptor.setFragmentFunctionDescriptor(fragment);
         descriptor.setInputPrimitiveTopology(MetalConst.topologyClass(shape));
         for (int i = 0; i < targets.size(); i++) {
             var target = targets.get(i);
@@ -119,7 +119,7 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
             attachment.setWriteMask(MetalConst.writeMask(target.writeMask()));
             if (target.blendFunction().isPresent()) {
                 var blend = target.blendFunction().get();
-                attachment.setBlendingEnabled(true);
+                attachment.setBlendingState(MTL4BlendState.MTL4BlendStateEnabled);
                 attachment.setSourceRGBBlendFactor(MetalConst.blendFactor(blend.color().sourceFactor()));
                 attachment.setDestinationRGBBlendFactor(MetalConst.blendFactor(blend.color().destFactor()));
                 attachment.setRgbBlendOperation(MetalConst.blendOp(blend.color().op()));
@@ -131,23 +131,14 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
         var layout = layout(pipeline);
         descriptor.setVertexDescriptor(layout);
         layout.release();
-        descriptor.setDepthAttachmentPixelFormat(MTLPixelFormat.MTLPixelFormatDepth32Float);
         MTLRenderPipelineState compiled = null;
-        MTLRenderPipelineState compiledNoDepth = null;
         try {
-            compiled = device.getDevice().newRenderPipelineStateWithDescriptor(descriptor);
-            if (depth == null) {
-                descriptor.setDepthAttachmentPixelFormat(MTLPixelFormat.MTLPixelFormatInvalid);
-                compiledNoDepth = device.getDevice().newRenderPipelineStateWithDescriptor(descriptor);
-            }
+            compiled = device.pipeline(descriptor);
         } catch (IllegalStateException e) {
             device.message("Couldn't compile pipeline " + name + ": " + e.getMessage());
-            compiled = null;
-            compiledNoDepth = null;
         }
         descriptor.release();
         state = compiled;
-        noDepth = compiledNoDepth;
     }
 
     //? if >= 26.3 {
@@ -216,24 +207,17 @@ public class MetalRenderPipeline implements CompiledRenderPipeline {
     public void close() {
         closed = true;
         if (state != null) {
-            state.release();
+            device.retire(state::release);
         }
-        if (noDepth != null) {
-            noDepth.release();
-        }
-        depthState.release();
+        device.retire(depthState::release);
     }
 
     public long topology() {
         return topology;
     }
 
-    public void bind(MTLRenderCommandEncoder pass, boolean depth) {
-        var chosen = depth || noDepth == null ? state : noDepth;
-        if (chosen == null) {
-            throw new IllegalStateException("pipeline does not fit this pass");
-        }
-        pass.setRenderPipelineState(chosen);
+    public void bind(MTL4RenderCommandEncoder pass) {
+        pass.setRenderPipelineState(state);
         pass.setDepthStencilState(depthState);
         pass.setCullMode(cull);
         pass.setTriangleFillMode(fill);

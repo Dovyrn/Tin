@@ -16,6 +16,6 @@ compared to vanilla vulkan backend.
 
 # Requirements
 
-- macOS with a GPU that supports Metal 3 (Apple Silicon, or a 2019 or newer Intel Mac)
+- macOS 26 with a GPU that supports Metal 4 (Apple Silicon)
 - Java 25
 - Fabric loader version 0.18.6 or newer

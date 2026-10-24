@@ -1,15 +1,15 @@
 package dev.dov.tin.metal.command;
 
 import com.mojang.blaze3d.systems.GpuQueryPool;
-import dev.dov.metalj.commands.MTLCommandBuffer;
-import dev.dov.metalj.commands.passes.MTLComputePassDescriptor;
-import dev.dov.metalj.debug.MTLCommonCounter;
-import dev.dov.metalj.debug.MTLCounterResultTimestamp;
-import dev.dov.metalj.debug.MTLCounterSampleBuffer;
-import dev.dov.metalj.debug.MTLCounterSampleBufferDescriptor;
-import dev.dov.metalj.debug.MTLCounterSet;
-import dev.dov.metalj.resources.MTLStorageMode;
+import dev.dov.metalj.metal4.MTL4CommandBuffer;
+import dev.dov.metalj.metal4.counters.MTL4CounterHeap;
+import dev.dov.metalj.metal4.counters.MTL4CounterHeapDescriptor;
+import dev.dov.metalj.metal4.counters.MTL4CounterHeapType;
+import dev.dov.metalj.metal4.counters.MTL4TimestampHeapEntry;
+import dev.dov.metalj.objc.NSObject;
+import dev.dov.metalj.objc.NSRange;
 import dev.dov.tin.metal.MetalDevice;
+import java.lang.foreign.Arena;
 import java.util.Arrays;
 import java.util.OptionalLong;
 import lombok.Getter;
@@ -17,7 +17,7 @@ import lombok.Getter;
 public class MetalQueryPool implements GpuQueryPool {
     private final int size;
     @Getter
-    private final MTLCounterSampleBuffer samples;
+    private final MTL4CounterHeap heap;
     private final long[] written;
     private final MetalDevice device;
 
@@ -26,56 +26,28 @@ public class MetalQueryPool implements GpuQueryPool {
         this.device = device;
         this.written = new long[size];
         Arrays.fill(written, Long.MIN_VALUE);
-        samples = samples(device, size);
+        heap = heap(device, size);
     }
 
-    private static MTLCounterSampleBuffer samples(MetalDevice device, int size) {
-        var set = timestamps(device);
-        if (set == null) {
+    private static MTL4CounterHeap heap(MetalDevice device, int size) {
+        var descriptor = MTL4CounterHeapDescriptor.new_();
+        descriptor.setType(MTL4CounterHeapType.MTL4CounterHeapTypeTimestamp);
+        descriptor.setCount(size);
+        try {
+            var heap = device.getDevice().newCounterHeapWithDescriptor(descriptor);
+            return heap.isNull() ? null : heap;
+        } catch (IllegalStateException e) {
             return null;
+        } finally {
+            descriptor.release();
         }
-        var descriptor = MTLCounterSampleBufferDescriptor.new_();
-        descriptor.setCounterSet(set);
-        descriptor.setStorageMode(MTLStorageMode.MTLStorageModeShared);
-        descriptor.setSampleCount(size);
-        var buffer = device.getDevice().newCounterSampleBufferWithDescriptor(descriptor);
-        descriptor.release();
-        return buffer;
     }
 
-    private static MTLCounterSet timestamps(MetalDevice device) {
-        var sets = device.getDevice().counterSets();
-        var wanted = MTLCommonCounter.MTLCommonCounterSetTimestamp().UTF8String();
-        for (long i = 0; i < sets.count(); i++) {
-            var set = MTLCounterSet.of(sets.objectAtIndex(i));
-            if (wanted.equals(set.name().UTF8String())) {
-                return set;
-            }
-        }
-        return null;
-    }
-
-    public void write(MTLCommandBuffer cmd, int index) {
-        if (samples == null) {
+    public void write(MTL4CommandBuffer cmd, int index) {
+        if (heap == null) {
             return;
         }
-        if (device.isStageSampling()) {
-            var pass = MTLComputePassDescriptor.computePassDescriptor();
-            var attachment = pass.sampleBufferAttachments().objectAtIndexedSubscript(0);
-            attachment.setSampleBuffer(samples);
-            attachment.setStartOfEncoderSampleIndex(index);
-            var encoder = cmd.computeCommandEncoderWithDescriptor(pass);
-            pass.release();
-            encoder.endEncoding();
-            encoder.release();
-        } else if (device.isBlitSampling()) {
-            var blit = cmd.blitCommandEncoder();
-            blit.sampleCountersInBuffer(samples, index, true);
-            blit.endEncoding();
-            blit.release();
-        } else {
-            return;
-        }
+        cmd.writeTimestampIntoHeap(heap, index);
         record(index);
     }
 
@@ -90,16 +62,18 @@ public class MetalQueryPool implements GpuQueryPool {
 
     @Override
     public OptionalLong getValue(int index) {
-        if (samples == null || written[index] == Long.MIN_VALUE) {
+        if (heap == null || written[index] == Long.MIN_VALUE) {
             return OptionalLong.empty();
         }
         if (!device.getEncoder().awaitSubmit(written[index], 0)) {
             return OptionalLong.empty();
         }
-        var resolved = samples.resolveCounterRange(index, 1);
-        long value = MTLCounterResultTimestamp.timestamp(resolved.bytes(), 0);
-        resolved.release();
-        return value == -1 ? OptionalLong.empty() : OptionalLong.of(value);
+        try (var arena = Arena.ofConfined()) {
+            var range = NSRange.of(arena, index, 1);
+            long value = NSObject.drained(() -> MTL4TimestampHeapEntry.timestamp(
+                    heap.resolveCounterRange(range).bytes(), 0));
+            return OptionalLong.of(value);
+        }
     }
 
     @Override
@@ -113,8 +87,8 @@ public class MetalQueryPool implements GpuQueryPool {
 
     @Override
     public void close() {
-        if (samples != null) {
-            samples.release();
+        if (heap != null) {
+            device.retire(heap::release);
         }
     }
 }

@@ -168,14 +168,14 @@ public class MetalTransientMemory implements TransientMemory {
 
     public void close() {
         for (var block : used) {
-            block.getBuffer().release();
+            device.evict(block.getBuffer());
         }
         for (var block : free) {
-            block.getBuffer().release();
+            device.evict(block.getBuffer());
         }
         for (var batch : retired) {
             for (var block : batch) {
-                block.getBuffer().release();
+                device.evict(block.getBuffer());
             }
         }
         for (var block : cpu) {
@@ -204,7 +204,7 @@ public class MetalTransientMemory implements TransientMemory {
         while (retired.size() > MetalCommandEncoder.IN_FLIGHT) {
             for (var block : retired.removeFirst()) {
                 if (block.size() > BLOCK && free.stream().anyMatch(kept -> kept.size() > BLOCK)) {
-                    block.getBuffer().release();
+                    device.evict(block.getBuffer());
                 } else {
                     free.add(block);
                 }

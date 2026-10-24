@@ -37,16 +37,23 @@ import com.mojang.blaze3d.vulkan.glsl.IntermediaryShaderModule;
 //?}
 import com.mojang.blaze3d.vulkan.glsl.ShaderCompileException;
 import com.mojang.logging.LogUtils;
-import dev.dov.metalj.debug.MTLCounterSamplingPoint;
-import dev.dov.metalj.device.MTLCommandQueue;
 import dev.dov.metalj.device.MTLDevice;
-import dev.dov.metalj.device.Metal;
+import dev.dov.metalj.metal4.MTL4CommandQueue;
+import dev.dov.metalj.metal4.compiler.MTL4Compiler;
+import dev.dov.metalj.metal4.compiler.MTL4CompilerDescriptor;
+import dev.dov.metalj.metal4.compiler.MTL4CompilerTaskOptions;
+import dev.dov.metalj.metal4.compiler.MTL4LibraryDescriptor;
+import dev.dov.metalj.metal4.compiler.MTL4LibraryFunctionDescriptor;
+import dev.dov.metalj.metal4.pipelines.MTL4RenderPipelineDescriptor;
 import dev.dov.metalj.objc.NSRange;
 import dev.dov.metalj.objc.NSString;
 import dev.dov.metalj.objc.ObjC;
+import dev.dov.metalj.pipelines.render.MTLRenderPipelineState;
 import dev.dov.metalj.pipelines.shaders.MTLCompileOptions;
-import dev.dov.metalj.pipelines.shaders.MTLFunction;
 import dev.dov.metalj.pipelines.shaders.MTLLanguageVersion;
+import dev.dov.metalj.residency.MTLResidencySet;
+import dev.dov.metalj.residency.MTLResidencySetDescriptor;
+import dev.dov.metalj.resources.MTLResource;
 import dev.dov.metalj.resources.MTLResourceOptions;
 import dev.dov.metalj.resources.MTLStorageMode;
 import dev.dov.metalj.resources.samplers.MTLSamplerDescriptor;
@@ -96,11 +103,18 @@ public class MetalDevice implements GpuDeviceBackend {
     private static final int MAX_ATTACHMENTS = 8;
     private static final float NO_LOD = 1000;
     private static final float MIP_THRESHOLD = 0.25f;
+    private static final long NANOS = 1_000_000_000;
 
     @Getter
     private final MTLDevice device;
     @Getter
-    private final MTLCommandQueue queue;
+    private final MTL4CommandQueue queue;
+    private final MTL4Compiler metal;
+    private final MTL4CompilerTaskOptions tasks;
+    private final MTLCompileOptions options;
+    private final MTLResidencySet residency;
+    private final List<MTLResource> evicted = new ArrayList<>();
+    private boolean dirty;
     //? if < 26.3 {
     private final Map<RenderPipeline, MetalRenderPipeline> pipelines = new IdentityHashMap<>();
     private final Map<MetalShaderKey, IntermediaryShaderModule> modules = new HashMap<>();
@@ -111,12 +125,6 @@ public class MetalDevice implements GpuDeviceBackend {
     private MetalCommandEncoder encoder;
     private final List<String> messages = new ArrayList<>();
     private final DeviceInfo info;
-    @Getter
-    private final boolean drawSampling;
-    @Getter
-    private final boolean stageSampling;
-    @Getter
-    private final boolean blitSampling;
     //? if < 26.3 {
     private final ShaderSource shaders;
     //?}
@@ -128,17 +136,23 @@ public class MetalDevice implements GpuDeviceBackend {
     public MetalDevice(MTLDevice device, ShaderSource shaders, GpuDebugOptions debug) {
     //?}
         this.device = device;
-        this.queue = device.newCommandQueue();
+        this.queue = device.newMTL4CommandQueue();
+        var compilerDescriptor = MTL4CompilerDescriptor.new_();
+        this.metal = device.newCompilerWithDescriptor(compilerDescriptor);
+        compilerDescriptor.release();
+        this.tasks = MTL4CompilerTaskOptions.new_();
+        this.options = MTLCompileOptions.new_();
+        options.setLanguageVersion(MTLLanguageVersion.MTLLanguageVersion3_0);
+        var residencyDescriptor = MTLResidencySetDescriptor.new_();
+        this.residency = device.newResidencySetWithDescriptor(residencyDescriptor);
+        residencyDescriptor.release();
+        queue.addResidencySet(residency);
         MetalConst.depth24 = device.isDepth24Stencil8PixelFormatSupported();
         this.clears = new MetalClears(this);
         //? if < 26.3 {
         this.shaders = shaders;
         //?}
         this.debug = debug;
-        this.drawSampling = device.supportsCounterSampling(MTLCounterSamplingPoint.MTLCounterSamplingPointAtDrawBoundary);
-        this.stageSampling = device.supportsCounterSampling(
-                MTLCounterSamplingPoint.MTLCounterSamplingPointAtStageBoundary);
-        this.blitSampling = device.supportsCounterSampling(MTLCounterSamplingPoint.MTLCounterSamplingPointAtBlitBoundary);
         this.info = info();
     }
 
@@ -161,6 +175,40 @@ public class MetalDevice implements GpuDeviceBackend {
         return new MetalGpuSurface(this, window);
     }
     //?}
+
+    public void track(MTLResource resource) {
+        residency.addAllocation(resource);
+        dirty = true;
+    }
+
+    public void evict(MTLResource resource) {
+        residency.removeAllocation(resource);
+        dirty = true;
+        evicted.add(resource);
+    }
+
+    public void free(MTLResource resource) {
+        retire(() -> evict(resource));
+    }
+
+    public void retire(Runnable release) {
+        if (encoder == null) {
+            release.run();
+        } else {
+            encoder.retire(release);
+        }
+    }
+
+    public void flush() {
+        if (dirty) {
+            residency.commit();
+            dirty = false;
+        }
+        for (var resource : evicted) {
+            resource.release();
+        }
+        evicted.clear();
+    }
 
     public MetalCommandEncoder getEncoder() {
         createCommandEncoder();
@@ -195,7 +243,8 @@ public class MetalDevice implements GpuDeviceBackend {
         if (sampler.isNull()) {
             throw new GpuOutOfMemoryException("Failed to create sampler");
         }
-        return new MetalGpuSampler(sampler, addressModeU, addressModeV, minFilter, magFilter, maxAnisotropy, maxLod);
+        return new MetalGpuSampler(this, sampler, addressModeU, addressModeV, minFilter, magFilter, maxAnisotropy,
+                maxLod);
     }
 
     public GpuTexture createTexture(@Nullable Supplier<String> label, int usage, GpuFormat format, int width,
@@ -241,7 +290,8 @@ public class MetalDevice implements GpuDeviceBackend {
             texture.setLabel(text);
             text.release();
         }
-        return new MetalGpuTexture(texture, usage, label, format, width, height, depthOrLayers, mipLevels);
+        track(texture);
+        return new MetalGpuTexture(this, texture, usage, label, format, width, height, depthOrLayers, mipLevels);
     }
 
     public void message(String message) {
@@ -266,12 +316,12 @@ public class MetalDevice implements GpuDeviceBackend {
         var parent = ((MetalGpuTexture) texture).getTexture();
         if (baseMipLevel == 0 && mipLevels == texture.getMipLevels()) {
             parent.retain();
-            return new MetalGpuTextureView(parent, texture, baseMipLevel, mipLevels);
+            return new MetalGpuTextureView(this, parent, texture, baseMipLevel, mipLevels);
         }
         try (var arena = Arena.ofConfined()) {
             var view = parent.newTextureViewWithPixelFormat(parent.pixelFormat(), parent.textureType(),
                     NSRange.of(arena, baseMipLevel, mipLevels), NSRange.of(arena, 0, texture.getDepthOrLayers()));
-            return new MetalGpuTextureView(view, texture, baseMipLevel, mipLevels);
+            return new MetalGpuTextureView(this, view, texture, baseMipLevel, mipLevels);
         }
     }
 
@@ -283,7 +333,8 @@ public class MetalDevice implements GpuDeviceBackend {
             throw new GpuOutOfMemoryException("Failed to create buffer of " + size + " bytes");
         }
         label(buffer::setLabel, label);
-        return new MetalGpuBuffer(buffer, usage, size);
+        track(buffer);
+        return new MetalGpuBuffer(this, buffer, usage, size);
     }
 
     @Override
@@ -296,11 +347,13 @@ public class MetalDevice implements GpuDeviceBackend {
             throw new GpuOutOfMemoryException("Failed to create buffer of " + size + " bytes");
         }
         label(buffer::setLabel, label);
-        return new MetalGpuBuffer(buffer, usage, size);
+        track(buffer);
+        return new MetalGpuBuffer(this, buffer, usage, size);
     }
 
     public MetalTransientBuffer createTransientBuffer(long size, LongSupplier submits) {
         var buffer = device.newBufferWithLength(size, MTLResourceOptions.MTLResourceStorageModeShared);
+        track(buffer);
         int usage = GpuBuffer.USAGE_COPY_SRC | GpuBuffer.USAGE_COPY_DST | GpuBuffer.USAGE_VERTEX
                 | GpuBuffer.USAGE_INDEX | GpuBuffer.USAGE_UNIFORM | GpuBuffer.USAGE_UNIFORM_TEXEL_BUFFER;
         return new MetalTransientBuffer(buffer, usage, size, submits);
@@ -485,24 +538,28 @@ public class MetalDevice implements GpuDeviceBackend {
 
 //?}
 
-    private MTLFunction function(String source, String entry) {
-        var options = MTLCompileOptions.new_();
-        options.setLanguageVersion(MTLLanguageVersion.MTLLanguageVersion3_0);
+    public MTL4LibraryFunctionDescriptor function(String source, String entry) {
+        var descriptor = MTL4LibraryDescriptor.new_();
+        var text = NSString.stringWithUTF8String(source);
+        descriptor.setSource(text);
+        descriptor.setOptions(options);
+        text.release();
         try {
-            var text = NSString.stringWithUTF8String(source);
+            var library = metal.newLibraryWithDescriptor(descriptor);
+            var function = MTL4LibraryFunctionDescriptor.new_();
             var name = NSString.stringWithUTF8String(entry);
-            var library = device.newLibraryWithSource(text, options);
-            var function = library.newFunctionWithName(name);
-            text.release();
+            function.setName(name);
+            function.setLibrary(library);
             name.release();
             library.release();
-            if (function.isNull()) {
-                throw new IllegalStateException("no function " + entry + " in the translated library");
-            }
             return function;
         } finally {
-            options.release();
+            descriptor.release();
         }
+    }
+
+    public MTLRenderPipelineState pipeline(MTL4RenderPipelineDescriptor descriptor) {
+        return metal.newRenderPipelineStateWithDescriptor(descriptor, tasks);
     }
 
     //? if < 26.3 {
@@ -529,22 +586,35 @@ public class MetalDevice implements GpuDeviceBackend {
     public void close() {
         if (encoder != null) {
             encoder.close();
+            encoder = null;
         }
         clears.close();
-        queue.release();
+        release();
     }
     *///?} else {
     @Override
     public void close() {
+        clearPipelineCache();
         if (encoder != null) {
             encoder.close();
+            encoder = null;
         }
-        clearPipelineCache();
         clears.close();
-        queue.release();
+        release();
         compiler.close();
     }
     //?}
+
+    private void release() {
+        flush();
+        residency.endResidency();
+        queue.removeResidencySet(residency);
+        residency.release();
+        tasks.release();
+        options.release();
+        metal.release();
+        queue.release();
+    }
 
     @Override
     public GpuQueryPool createTimestampQueryPool(int size) {
@@ -566,23 +636,8 @@ public class MetalDevice implements GpuDeviceBackend {
     }
 
     private float period() {
-        long[] first = timestamps();
-        long until = System.nanoTime() + 2_000_000;
-        while (System.nanoTime() < until) {
-            Thread.onSpinWait();
-        }
-        long[] second = timestamps();
-        long gpu = second[1] - first[1];
-        return gpu <= 0 ? 1 : (float) (second[0] - first[0]) / gpu;
-    }
-
-    private long[] timestamps() {
-        try (var arena = Arena.ofConfined()) {
-            var cpu = arena.allocate(ObjC.LONG);
-            var gpu = arena.allocate(ObjC.LONG);
-            device.sampleTimestamps(cpu, gpu);
-            return new long[] {cpu.get(ObjC.LONG, 0), gpu.get(ObjC.LONG, 0)};
-        }
+        long frequency = device.queryTimestampFrequency();
+        return frequency <= 0 ? 1 : (float) NANOS / frequency;
     }
 
     //? if >= 26.3 {
@@ -602,7 +657,7 @@ public class MetalDevice implements GpuDeviceBackend {
             var cpu = arena.allocate(ObjC.LONG);
             var gpu = arena.allocate(ObjC.LONG);
             device.sampleTimestamps(cpu, gpu);
-            return gpu.get(ObjC.LONG, 0);
+            return (long) (gpu.get(ObjC.LONG, 0) / (double) NANOS * device.queryTimestampFrequency());
         }
     }
     //?}

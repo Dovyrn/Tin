@@ -4,6 +4,7 @@ import com.mojang.blaze3d.textures.AddressMode;
 import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.textures.GpuSampler;
 import dev.dov.metalj.resources.samplers.MTLSamplerState;
+import dev.dov.tin.metal.MetalDevice;
 import java.util.OptionalDouble;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -15,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 *///?} else {
 public class MetalGpuSampler extends GpuSampler {
 //?}
+    private final MetalDevice device;
     private final MTLSamplerState sampler;
     private final AddressMode addressModeU;
     private final AddressMode addressModeV;
@@ -28,7 +30,7 @@ public class MetalGpuSampler extends GpuSampler {
     public void close() {
         if (!closed) {
             closed = true;
-            sampler.release();
+            device.retire(sampler::release);
         }
     }
 }

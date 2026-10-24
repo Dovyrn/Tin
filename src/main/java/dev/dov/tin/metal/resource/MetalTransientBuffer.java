@@ -16,6 +16,8 @@ public class MetalTransientBuffer extends GpuBuffer {
 //?}
     @Getter
     private final MTLBuffer buffer;
+    @Getter
+    private final long address;
     private final LongSupplier submits;
     @Getter
     private long index;
@@ -24,6 +26,7 @@ public class MetalTransientBuffer extends GpuBuffer {
     public MetalTransientBuffer(MTLBuffer buffer, int usage, long size, LongSupplier submits) {
         super(usage, size);
         this.buffer = buffer;
+        this.address = buffer.gpuAddress();
         this.submits = submits;
         this.index = submits.getAsLong();
     }

@@ -7,6 +7,7 @@ import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.GpuTextureView;
 //?}
 import dev.dov.metalj.resources.textures.MTLTexture;
+import dev.dov.tin.metal.MetalDevice;
 import lombok.Getter;
 
 //? if >= 26.3 {
@@ -14,13 +15,16 @@ import lombok.Getter;
 *///?} else {
 public class MetalGpuTextureView extends GpuTextureView {
 //?}
+    private final MetalDevice device;
     @Getter
     private final MTLTexture view;
     @Getter
     private boolean closed;
 
-    public MetalGpuTextureView(MTLTexture view, GpuTexture texture, int baseMipLevel, int mipLevels) {
+    public MetalGpuTextureView(MetalDevice device, MTLTexture view, GpuTexture texture, int baseMipLevel,
+            int mipLevels) {
         super(texture, baseMipLevel, mipLevels);
+        this.device = device;
         this.view = view;
     }
 
@@ -28,7 +32,7 @@ public class MetalGpuTextureView extends GpuTextureView {
     public void close() {
         if (!closed) {
             closed = true;
-            view.release();
+            device.retire(view::release);
         }
     }
 }

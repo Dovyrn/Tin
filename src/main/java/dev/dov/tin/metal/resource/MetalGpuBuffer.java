@@ -7,6 +7,7 @@ import com.mojang.blaze3d.buffers.GpuBuffer;
 //?}
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import dev.dov.metalj.resources.buffers.MTLBuffer;
+import dev.dov.tin.metal.MetalDevice;
 import lombok.Getter;
 import org.lwjgl.system.MemoryUtil;
 
@@ -15,21 +16,26 @@ import org.lwjgl.system.MemoryUtil;
 *///?} else {
 public class MetalGpuBuffer extends GpuBuffer {
 //?}
+    private final MetalDevice device;
     @Getter
     private final MTLBuffer buffer;
     @Getter
+    private final long address;
+    @Getter
     private boolean closed;
 
-    public MetalGpuBuffer(MTLBuffer buffer, int usage, long size) {
+    public MetalGpuBuffer(MetalDevice device, MTLBuffer buffer, int usage, long size) {
         super(usage, size);
+        this.device = device;
         this.buffer = buffer;
+        this.address = buffer.gpuAddress();
     }
 
     @Override
     public void close() {
         if (!closed) {
             closed = true;
-            buffer.release();
+            device.free(buffer);
         }
     }
 
